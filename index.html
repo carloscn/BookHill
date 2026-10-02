@@ -4,9 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>langLSRW</title>
+  <!-- Public OAuth client ID (Google sign-in + Drive) and browser API key for the Sheets Picker; both are restricted to this site's origins. -->
+  <meta name="google-client-id" content="180213407454-r5uujgmro3f0o8opcens160nkrn3s85q.apps.googleusercontent.com">
+  <meta name="google-api-key" content="AIzaSyBVHLOHo33UvlhmQPrVwcNmSlbOrUTFgeY">
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20261002-2">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-3">
 
 </head>
 <body data-theme="eye" data-active-page="listenPage">
@@ -24,6 +27,7 @@
               使用 Google 登录
             </button>
             <div id="cloudLoginStatus" class="cloud-login-status" aria-live="polite">尚未配置云登录</div>
+            <div class="small-note cloud-login-note">句库、收藏、背词进度和设置保存在你自己的 Google Drive「langLSRW」文件夹，服务器不保存任何数据。</div>
           </div>
         </section>
         <div class="login-choice-or" aria-hidden="true">or</div>
@@ -82,8 +86,8 @@
               <div class="account-menu-title">登录账户</div>
               <div id="cloudAccountStatus" class="cloud-account-status">未登录云账号</div>
               <button id="cloudLogoutBtn" type="button" disabled>退出 Google</button>
-              <div class="small-note">登录时读取一次云端数据；调试阶段不会自动保存。</div>
-              <button id="syncCloudBtn" type="button" disabled>手动同步</button>
+              <div class="small-note">数据保存在你自己的 Google Drive「langLSRW」文件夹，修改后自动同步。刷新页面后需要点一次「立即同步」重新连接。</div>
+              <button id="syncCloudBtn" type="button" disabled>立即同步</button>
             </section>
             <section id="localUserMenuSection" class="account-menu-section" hidden>
               <div class="account-menu-title">本机用户</div>
@@ -287,6 +291,8 @@
               <input id="libraryFileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" hidden>
               <button id="renameLibraryBtn" type="button" disabled>重命名</button>
               <button id="exportLibraryBtn" type="button" disabled title="下载为「句子 | 翻译」格式的 txt，可以直接重新导入">导出 txt</button>
+              <button id="librarySheetUpdateBtn" type="button" hidden title="重新读取来源 Google 表格，新句子追加进来，翻译有变化的会合并">从表格更新</button>
+              <button id="librarySheetOpenBtn" type="button" hidden title="在新标签页打开来源 Google 表格">打开表格</button>
               <button id="deleteLibraryBtn" type="button" disabled>删除</button>
               <button id="useLibraryBtn" class="primary" type="button" disabled>使用此句库</button>
             </div>
@@ -326,6 +332,13 @@
             导入 txt / lrc / tsv 句库
             <input id="fileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" title="选择一个 .txt、.lrc 或 .tsv 文件">
           </label>
+          <div id="sheetImportPanel" class="sheet-import">
+            <div class="sheet-import-title">从 Google 表格导入</div>
+            <input id="sheetUrlInput" type="text" placeholder="粘贴 Google 表格链接（可不填，直接选择）" aria-label="Google 表格链接">
+            <button id="sheetImportBtn" type="button">选择 Google 表格</button>
+            <div class="sheet-import-guest small-note">从 Google 表格导入：需要先用 Google 登录。</div>
+            <div class="small-note">每行一句，一列句子、一列翻译；导入后可以随时「从表格更新」。</div>
+          </div>
           <label>
             粘贴句子（一行一句，用「|」分隔翻译）
             <textarea id="sentenceInput" class="sentence-list" spellcheck="false"></textarea>
@@ -368,6 +381,15 @@
       <div class="import-body">
         <div id="importSummary" class="import-summary"></div>
         <div id="importPreview" class="library-sentence-list import-preview"></div>
+        <fieldset id="importSheetOptions" class="import-options" hidden>
+          <legend>表格的列</legend>
+          <label class="radio-row"><span>练习句子</span><select id="importTextColumn" aria-label="练习句子所在的列"></select></label>
+          <label class="radio-row"><span>翻译</span><select id="importTranslationColumn" aria-label="翻译所在的列"></select></label>
+          <label class="check-row">
+            <input id="importHeaderToggle" type="checkbox">
+            <span>第一行是表头（不导入）</span>
+          </label>
+        </fieldset>
         <label id="importSwapRow" class="check-row">
           <input id="importSwapToggle" type="checkbox">
           <span>对调两列：把「|」右边的内容作为练习句子</span>
@@ -392,6 +414,7 @@
           <label class="radio-row"><input type="radio" name="importDuplicates" value="replace"><span>用新翻译覆盖</span></label>
         </fieldset>
       </div>
+      <div id="importDriveNote" class="small-note import-drive-note"></div>
       <div class="import-actions">
         <button id="confirmImportBtn" class="primary" type="button">导入</button>
       </div>
@@ -845,18 +868,17 @@
   </div>
   <div id="dictionaryLookupPopover" class="dictionary-lookup-popover" role="dialog" aria-label="单词查询" hidden></div>
   <div id="englishLookupPopover" class="dictionary-lookup-popover english-lookup-popover" role="dialog" aria-label="英语词典查询" hidden></div>
-  <script src="src/cloud-config.js?v=20260925-1"></script>
-  <script src="src/vendor/supabase/supabase-2.117.1.js"></script>
-  <script src="src/auth/supabase-auth-service.js?v=20260925-1"></script>
+  <script src="src/cloud-sync.js?v=20261002-1"></script>
+  <script src="src/google-drive.js?v=20261002-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20261002-1"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261002-2"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20260928-5"></script>
-  <script src="src/app.js?v=20261002-2"></script>
+  <script src="src/app.js?v=20261002-4"></script>
 </body>
 </html>

@@ -154,18 +154,37 @@ function reply(id, result, error) {
   self.postMessage({ id, result, error: error ? String(error.message || error) : undefined });
 }
 
+let initializing = null;
+
+// The OPFS pool takes exclusive file handles. Right after a reload the previous page's Worker may still hold them,
+// so opening the pool is retried a few times, and a failure is not cached: the next call tries again.
 async function initialize() {
-  if (sqlite3) return;
-  sqlite3 = await sqlite3InitModule({
-    locateFile: (file) => new URL(`../vendor/sqlite-wasm/${file}`, import.meta.url).href
+  if (pool) return;
+  initializing ||= (async () => {
+    sqlite3 ||= await sqlite3InitModule({
+      locateFile: (file) => new URL(`../vendor/sqlite-wasm/${file}`, import.meta.url).href
+    });
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const opened = await sqlite3.installOpfsSAHPoolVfs({
+          name: "langlsrw-dictionary",
+          directory: ".langlsrw-dictionary",
+          initialCapacity: 4,
+          forceReinitIfPreviouslyFailed: true
+        });
+        // Room for both dictionaries plus the journal of the frequency import.
+        await opened.reserveMinimumCapacity(6);
+        pool = opened;
+        return;
+      } catch (error) {
+        if (attempt >= 5) throw new Error(`本地词典存储暂时被占用（可能在另一个标签页打开着），请稍后再试：${error.message || error}`);
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+  })().finally(() => {
+    initializing = null;
   });
-  pool = await sqlite3.installOpfsSAHPoolVfs({
-    name: "langlsrw-dictionary",
-    directory: ".langlsrw-dictionary",
-    initialCapacity: 4
-  });
-  // Room for both dictionaries plus the journal of the frequency import.
-  await pool.reserveMinimumCapacity(6);
+  await initializing;
 }
 
 function closeDatabase() {

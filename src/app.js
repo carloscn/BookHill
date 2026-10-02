@@ -167,7 +167,6 @@ const fallbackSentences = [
       cloudUser: null,
       cloudSyncing: false,
       cloudLastSyncedAt: "",
-      cloudSwitchingToLocal: false,
       dictionaryLookupEntry: null,
       dictionaryLibraryPage: 1,
       dictionaryLibraryPageCount: 1,
@@ -542,74 +541,202 @@ const fallbackSentences = [
       scheduleCloudSync();
     }
 
-    const AUTO_CLOUD_SYNC_ENABLED = false;
-    let cloudSyncTimer = 0;
+    // ---- Google sign-in + Drive sync (src/google-drive.js, src/cloud-sync.js) ----------------------------------
+    // A Google account is the identity "cloud:<sub>". Its records and libraries live in this browser like any
+    // identity's, and are mirrored to the user's own Drive: langLSRW/langlsrw-userdata.json (the personal data
+    // document, merged record by record, newer wins) and langLSRW/libraries/*.tsv. Nothing is kept on our server.
+    // Google's token model needs a click to (re)connect, so after a reload sync waits for 「立即同步」.
+    const googleDrive = window.langLSRWGoogleDrive;
+    const cloudSync = window.langLSRWCloudSync;
+    const cloud = { running: null, timer: 0, due: 0, again: false, status: "" };
+    const CLOUD_SYNC_DELAY = 8000;
 
     function cloudDisplayName(user = state.cloudUser) {
       if (!user) return "";
-      return String(user.user_metadata?.full_name || user.user_metadata?.name || user.email || "Google 用户");
+      return String(user.name || user.email || "Google 用户");
     }
 
     function renderCloudAuthState(message = "") {
-      const configured = Boolean(window.langLSRWCloudAuth?.isConfigured());
+      const configured = googleDrive.isConfigured();
       const signedIn = Boolean(state.cloudUser);
+      if (message) cloud.status = message;
       $("cloudUserMenuSection").hidden = !signedIn;
       $("localUserMenuSection").hidden = signedIn || !state.currentUser;
       $("googleLoginBtn").disabled = !configured || signedIn;
-      $("cloudLogoutBtn").disabled = !signedIn || state.cloudSyncing;
-      $("syncCloudBtn").disabled = !signedIn || state.cloudSyncing;
+      $("cloudLogoutBtn").disabled = !signedIn;
+      $("syncCloudBtn").disabled = !signedIn || Boolean(cloud.running);
       $("clearUserBtn").disabled = signedIn || !state.currentUser;
       $("clearUserBtn").title = signedIn ? "请先退出 Google 登录" : "删除当前浏览器中的本机用户和练习记录";
-      $("cloudLoginStatus").textContent = message || (signedIn
+      $("cloudLoginStatus").textContent = signedIn
         ? `已登录：${cloudDisplayName()}`
-        : configured ? "" : "云登录未配置");
+        : (message || (configured ? "" : "云登录未配置"));
       $("cloudAccountStatus").textContent = signedIn
-        ? `${cloudDisplayName()}${state.cloudLastSyncedAt ? ` · 云端保存 ${new Date(state.cloudLastSyncedAt).toLocaleString()}` : " · 尚未保存"}`
+        ? `${cloudDisplayName()}${state.cloudUser.email && state.cloudUser.email !== cloudDisplayName() ? `（${state.cloudUser.email}）` : ""} · ${cloud.status || (googleDrive.hasToken() ? "已连接" : "未连接")}`
         : "未登录云账号";
       if (signedIn) $("userBadge").textContent = `用户：${cloudDisplayName()}`;
     }
 
-    // The cloud row carries the same personal data document as a backup export.
-    function collectCloudPayload() {
-      return userData.exportDocument({ identity: userDataIdentityMeta() });
+    function libraryTombstoneKey(owner = libraryOwner()) {
+      return `langLSRWLibraryTombstones:${owner}`;
     }
 
-    function applyCloudPayload(payload) {
-      if (!userData.isDocument(payload)) return;
-      state.cloudSyncing = true;
+    function loadLibraryTombstones(owner = libraryOwner()) {
       try {
-        userData.importDocument(payload);
-      } finally {
-        state.cloudSyncing = false;
+        const ids = JSON.parse(localStorage.getItem(libraryTombstoneKey(owner)) || "[]");
+        return Array.isArray(ids) ? ids : [];
+      } catch {
+        return [];
       }
-      refreshAfterUserDataChange();
     }
 
-    async function pushCloudState() {
-      if (!state.cloudUser || state.cloudSyncing) return;
-      state.cloudSyncing = true;
-      renderCloudAuthState("正在保存到云端...");
-      try {
-        state.cloudLastSyncedAt = await window.langLSRWCloudAuth.saveState(state.cloudUser.id, collectCloudPayload());
-        renderCloudAuthState("已保存到云端");
-      } catch (error) {
-        renderCloudAuthState(`云端保存失败：${error.message || error}`);
-      } finally {
-        state.cloudSyncing = false;
+    // Returns the ids of libraries whose content or existence changed on this device.
+    async function syncLibraries(owner) {
+      const local = await libraryStore.list(owner);
+      const tombstones = loadLibraryTombstones(owner);
+      const plan = cloudSync.planLibrarySync({ local, remote: await googleDrive.listLibraries(), tombstones });
+      const localById = new Map(local.map((library) => [library.id, library]));
+      const changed = new Set();
+      for (const fileId of plan.trashRemote) await googleDrive.trashFile(fileId);
+      for (const id of plan.deleteLocal) {
+        await libraryStore.remove(owner, id);
+        changed.add(id);
+      }
+      for (const { id, name, fileId } of plan.rename) {
+        await libraryStore.put(owner, { ...localById.get(id), name, driveFileId: fileId });
+        changed.add(id);
+      }
+      for (const file of plan.download) {
+        const existing = localById.get(file.libraryId);
+        await libraryStore.put(owner, {
+          id: file.libraryId,
+          name: file.name,
+          source: existing?.source || "Google Drive",
+          language: file.language || existing?.language || "en",
+          sheet: file.sheet || existing?.sheet || null,
+          createdAt: existing?.createdAt || file.updatedAt,
+          updatedAt: file.updatedAt,
+          items: importer.parseTsvLibrary(await googleDrive.downloadLibrary(file.fileId), { hasIdColumn: true }),
+          driveFileId: file.fileId
+        });
+        changed.add(file.libraryId);
+      }
+      for (const { library, fileId } of plan.upload) {
+        const { user: _owner, count: _count, ...record } = library;
+        const driveFileId = await googleDrive.uploadLibrary(fileId, record, cloudSync.libraryToTsv(record.items));
+        // Re-read: the library may have been edited while it uploaded.
+        const latest = await libraryStore.get(owner, library.id);
+        if (latest) await libraryStore.put(owner, { ...latest, driveFileId });
+      }
+      const remaining = loadLibraryTombstones(owner).filter((id) => !tombstones.includes(id));
+      localStorage.setItem(libraryTombstoneKey(owner), JSON.stringify(remaining));
+      return changed;
+    }
+
+    // After a sync changed libraries: refresh the list, and the practice view when its library changed or went away.
+    async function refreshLibrariesAfterSync(changed) {
+      await reloadMyLibraries();
+      if (!$("libraryModal").hidden) await loadCommonLibrary();
+      const active = state.libraries.find((library) => library.id === state.activeLibraryId);
+      if (state.currentLibraryLabel === "我的句库" && active && changed.has(active.id)) {
+        practiceLibrary(active, state.index);
+        render();
+      } else if (!active && (state.activeLibraryId || state.libraries.length)) {
+        state.activeLibraryId = "";
+        await tryLoadDefaultLibrary();
+        render();
+      }
+    }
+
+    async function syncWithCloud({ interactive = false } = {}) {
+      if (!state.cloudUser) return;
+      if (cloud.running) {
+        // Something changed mid-sync: run once more when this one finishes.
+        cloud.again = true;
+        return cloud.running;
+      }
+      clearTimeout(cloud.timer);
+      cloud.timer = 0;
+      const run = async () => {
+        const identity = userDataIdentity();
+        try {
+          if (!googleDrive.hasToken()) {
+            if (!interactive) {
+              renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
+              return;
+            }
+            await googleDrive.reconnect();
+          }
+          renderCloudAuthState("正在同步…");
+          await userData.flush();
+          const changedLibraries = await syncLibraries(libraryOwner());
+          if (identity !== userDataIdentity()) return;
+          const remote = await googleDrive.pull();
+          if (identity !== userDataIdentity()) return;
+          let counts = { added: 0, updated: 0 };
+          if (userData.isDocument(remote)) {
+            state.cloudSyncing = true;
+            try {
+              counts = userData.importDocument(remote);
+            } finally {
+              state.cloudSyncing = false;
+            }
+          }
+          if (counts.added || counts.updated) refreshAfterUserDataChange();
+          if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
+          const local = userData.exportDocument({ identity: userDataIdentityMeta() });
+          if (!cloudSync.sameDocument(local, remote)) await googleDrive.push(local);
+          state.cloudLastSyncedAt = new Date().toISOString();
+          const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+          renderCloudAuthState(`已同步 · ${time}`);
+        } catch (error) {
+          renderCloudAuthState(error.code === "token_expired"
+            ? "连接已过期：点「立即同步」重新连接"
+            : `同步失败：${error.message || error}`);
+        }
+      };
+      // The lock is cleared in .finally(), which always runs after this assignment.
+      cloud.running = run().finally(() => {
+        cloud.running = null;
         renderCloudAuthState();
-      }
+        if (cloud.again) {
+          cloud.again = false;
+          scheduleCloudSync(0);
+        }
+      });
+      renderCloudAuthState();
+      return cloud.running;
     }
 
-    function scheduleCloudSync() {
-      if (!AUTO_CLOUD_SYNC_ENABLED || !state.cloudUser || state.cloudSyncing) return;
-      clearTimeout(cloudSyncTimer);
-      cloudSyncTimer = setTimeout(pushCloudState, 1200);
+    function pushCloudState() {
+      return syncWithCloud({ interactive: true });
+    }
+
+    function scheduleCloudSync(delay = CLOUD_SYNC_DELAY) {
+      if (!state.cloudUser || state.cloudSyncing || !googleDrive.hasToken()) return;
+      if (cloud.running) {
+        cloud.again = true;
+        return;
+      }
+      // Keep the earliest pending deadline: a library import (short delay) must not be pushed back by a later
+      // routine data change (long delay).
+      const due = Date.now() + delay;
+      if (cloud.timer && cloud.due <= due) return;
+      clearTimeout(cloud.timer);
+      cloud.due = due;
+      cloud.timer = setTimeout(() => {
+        cloud.timer = 0;
+        syncWithCloud();
+      }, delay);
     }
 
     function completeCloudSignOut(message = "已退出 Google") {
+      clearTimeout(cloud.timer);
+      cloud.timer = 0;
+      googleDrive.signOut();
       state.cloudUser = null;
       state.cloudLastSyncedAt = "";
       state.currentUser = "";
+      cloud.status = "";
       localStorage.removeItem("langLSRWCurrentUser");
       $("userBadge").textContent = "未登录";
       renderCloudAuthState(message);
@@ -617,64 +744,66 @@ const fallbackSentences = [
       showLogin();
     }
 
-    async function activateCloudUser(user) {
-      if (!user || state.cloudUser?.id === user.id) return;
-      state.cloudUser = user;
+    // Opens the Google identity. `carry` (optional) is the previous local identity's data to copy in.
+    async function activateCloudUser(profile, carry = null) {
+      state.cloudUser = { id: profile.sub, email: profile.email || "", name: profile.name || "" };
       state.currentUser = "";
       localStorage.removeItem("langLSRWCurrentUser");
       await openUserData();
-      renderCloudAuthState("正在读取云端数据...");
-      try {
-        const remote = await window.langLSRWCloudAuth.loadState(user.id);
-        if (remote?.payload) {
-          state.cloudLastSyncedAt = remote.updated_at || "";
-          applyCloudPayload(remote.payload);
+      if (carry) {
+        if (carry.document) userData.importDocument(carry.document);
+        const now = new Date().toISOString();
+        for (const { user: _owner, count: _count, driveFileId: _file, ...library } of carry.libraries) {
+          await libraryStore.put(libraryOwner(), { ...library, updatedAt: now });
         }
-        await tryLoadDefaultLibrary();
-        hideLogin();
-        render();
-      } catch (error) {
-        renderCloudAuthState(`云端读取失败，本地模式仍可使用：${error.message || error}`);
       }
+      await tryLoadDefaultLibrary();
+      hideLogin();
+      render();
+      renderCloudAuthState();
+    }
+
+    // Offers to copy the guest's / local user's libraries and records into the Google account being signed in.
+    async function dataToCarryIntoCloud(profile) {
+      if (state.cloudUser) return null;
+      const label = state.currentUser || "游客";
+      const libraries = await libraryStore.list(libraryOwner()).catch(() => []);
+      const document = userData.exportDocument({ identity: userDataIdentityMeta() });
+      const recordCount = [document.global, ...Object.values(document.languages || {})]
+        .reduce((sum, collections) => sum + Object.values(collections || {}).reduce((total, items) => total + Object.keys(items || {}).length, 0), 0);
+      if (!libraries.length && !recordCount) return null;
+      const parts = [libraries.length ? `${libraries.length} 个句库` : "", recordCount ? `${recordCount} 条学习记录` : ""].filter(Boolean).join("和");
+      const ok = await showAppConfirm(
+        `把「${label}」在本机的${parts}一起导入 Google 账号（${profile.email || profile.name}）吗？句库会上传到你的 Google Drive；本机的「${label}」保持不变。`,
+        { title: "导入本机数据", okText: "一起导入", cancelText: "不用" }
+      );
+      return ok ? { document: recordCount ? document : null, libraries } : null;
     }
 
     async function initializeCloudAuth() {
       renderCloudAuthState();
-      if (!window.langLSRWCloudAuth?.isConfigured()) return;
-      try {
-        window.langLSRWCloudAuth.onAuthStateChange((event, session) => {
-          if (session?.user) activateCloudUser(session.user);
-          if (event === "SIGNED_OUT") {
-            state.cloudUser = null;
-            state.cloudLastSyncedAt = "";
-            if (state.cloudSwitchingToLocal) return;
-            completeCloudSignOut();
-          }
-        });
-        const user = await window.langLSRWCloudAuth.getUser();
-        if (user) await activateCloudUser(user);
-      } catch (error) {
-        renderCloudAuthState(`云账号初始化失败：${error.message || error}`);
-      }
+      const profile = googleDrive.isConfigured() ? googleDrive.getProfile() : null;
+      if (!profile || state.currentUser) return;
+      await activateCloudUser(profile);
+      renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
     }
 
+    // Runs from the login button's click: Google opens its popup.
     async function signInWithGoogle() {
-      renderCloudAuthState("正在跳转到 Google...");
+      renderCloudAuthState("正在连接 Google…");
       try {
-        await window.langLSRWCloudAuth.signInWithGoogle();
+        const profile = await googleDrive.signIn({ selectAccount: true });
+        const carry = await dataToCarryIntoCloud(profile);
+        await activateCloudUser(profile, carry);
+        await syncWithCloud();
       } catch (error) {
         renderCloudAuthState(`登录失败：${error.message || error}`);
       }
     }
 
     async function signOutCloudUser() {
-      try {
-        clearTimeout(cloudSyncTimer);
-        await window.langLSRWCloudAuth.signOut();
-        if (state.cloudUser) completeCloudSignOut();
-      } catch (error) {
-        renderCloudAuthState(`退出失败：${error.message || error}`);
-      }
+      if (cloud.running) await cloud.running.catch(() => {});
+      completeCloudSignOut();
     }
 
     function normalizeSentenceItem(item) {
@@ -881,16 +1010,13 @@ const fallbackSentences = [
       const username = normalizeUsername(name);
       if (!username) return;
       if (state.cloudUser) {
-        clearTimeout(cloudSyncTimer);
-        state.cloudSwitchingToLocal = true;
-        try {
-          await window.langLSRWCloudAuth.signOut();
-        } catch {
-          // Local mode remains available even if the remote session cannot be closed.
-        }
+        if (cloud.running) await cloud.running.catch(() => {});
+        clearTimeout(cloud.timer);
+        cloud.timer = 0;
+        googleDrive.signOut();
         state.cloudUser = null;
         state.cloudLastSyncedAt = "";
-        state.cloudSwitchingToLocal = false;
+        cloud.status = "";
       }
       state.currentUser = username;
       localStorage.setItem("langLSRWCurrentUser", username);
@@ -1127,7 +1253,8 @@ const fallbackSentences = [
 
     function libraryMetaText(library) {
       const translated = library.items.filter((item) => item.translation).length;
-      return `${library.items.length.toLocaleString()} 句 · ${translated.toLocaleString()} 句有翻译${library.source ? ` · 来源 ${library.source}` : ""}`;
+      const where = state.cloudUser ? (library.driveFileId ? " · 已存到 Google Drive" : " · 等待同步到 Google Drive") : " · 仅保存在本机";
+      return `${library.items.length.toLocaleString()} 句 · ${translated.toLocaleString()} 句有翻译${library.source ? ` · 来源 ${library.source}` : ""}${where}`;
     }
 
     function selectLibraryInModal(id) {
@@ -1155,6 +1282,9 @@ const fallbackSentences = [
       });
       $("libraryMeta").textContent = selected ? libraryMetaText(selected) : `还没有${currentLearningLanguage().label}句库`;
       $("useLibraryBtn").textContent = selected && selected.id === state.activeLibraryId ? "继续练习" : "使用此句库";
+      $("librarySheetUpdateBtn").hidden = !selected?.sheet;
+      $("librarySheetOpenBtn").hidden = !selected?.sheet;
+      $("sheetImportPanel").classList.toggle("is-guest", !state.cloudUser);
       if (selected) renderLibraryPage();
     }
 
@@ -1207,13 +1337,19 @@ const fallbackSentences = [
       await libraryStore.put(libraryOwner(), { ...library, name: name.slice(0, 80), updatedAt: new Date().toISOString() });
       await loadCommonLibrary();
       if (state.activeLibraryId === id) syncCurrentLibrarySelect(state.currentLibraryLabel);
+      scheduleCloudSync(500);
     }
 
     async function deleteLibrary(id) {
       const library = state.libraries.find((item) => item.id === id);
       if (!library) return;
-      if (!(await showAppConfirm(`确定删除句库「${library.name}」吗？这台设备上的这个句库会被删除。`, { title: "删除句库", okText: "删除" }))) return;
+      const where = state.cloudUser ? "本机和 Google Drive 里的这个句库都会删除（Drive 里的文件移到回收站）。" : "这台设备上的这个句库会被删除。";
+      if (!(await showAppConfirm(`确定删除句库「${library.name}」吗？${where}`, { title: "删除句库", okText: "删除" }))) return;
       await libraryStore.remove(libraryOwner(), id);
+      if (library.driveFileId) {
+        localStorage.setItem(libraryTombstoneKey(), JSON.stringify([...new Set([...loadLibraryTombstones(), id])]));
+        scheduleCloudSync(500);
+      }
       await loadCommonLibrary();
       if (state.activeLibraryId === id) {
         state.activeLibraryId = "";
@@ -1238,15 +1374,48 @@ const fallbackSentences = [
     // ---- Import dialog (preview, new vs. append, duplicates) -------------------
     const formatLabels = { pipe: "竖线「|」分隔", tsv: "Tab 分隔", lrc: "LRC 歌词", lines: "逐行", sheet: "表格" };
 
+    function sheetLayoutFromDialog() {
+      return {
+        textColumn: Number($("importTextColumn").value),
+        translationColumn: Number($("importTranslationColumn").value),
+        hasHeader: $("importHeaderToggle").checked
+      };
+    }
+
+    // Parsed result for the current dialog choices (columns for a sheet, the swap toggle for text files).
+    function currentImportResult() {
+      const pending = state.pendingImport;
+      if (pending.rows) return importer.rowsToItems(pending.rows, sheetLayoutFromDialog());
+      if (!$("importSwapToggle").checked) return pending.parsed;
+      return { ...pending.parsed, items: importer.mergeItems([], importer.swapColumns(pending.parsed.items)).items };
+    }
+
     function importItems() {
-      const parsed = state.pendingImport.parsed;
-      if (!$("importSwapToggle").checked) return parsed.items;
-      return importer.mergeItems([], importer.swapColumns(parsed.items)).items;
+      return currentImportResult().items;
+    }
+
+    function columnName(index) {
+      return String.fromCharCode(65 + (index % 26)).repeat(Math.floor(index / 26) + 1);
+    }
+
+    function renderSheetColumnOptions(rows, layout) {
+      const width = Math.max(1, ...rows.map((row) => row.length));
+      const sample = rows[0] || [];
+      const options = Array.from({ length: width }, (_, index) => {
+        const hint = String(sample[index] ?? "").trim().slice(0, 16);
+        return `<option value="${index}">${columnName(index)} 列${hint ? `（${escapeHtml(hint)}）` : ""}</option>`;
+      }).join("");
+      $("importTextColumn").innerHTML = options;
+      $("importTranslationColumn").innerHTML = `<option value="-1">（没有翻译）</option>${options}`;
+      $("importTextColumn").value = String(layout.textColumn);
+      $("importTranslationColumn").value = String(layout.translationColumn);
+      $("importHeaderToggle").checked = layout.hasHeader;
     }
 
     function renderImportDialog() {
-      const { parsed, source } = state.pendingImport;
-      const items = importItems();
+      const { source } = state.pendingImport;
+      const parsed = currentImportResult();
+      const items = parsed.items;
       const parts = [
         `格式：${formatLabels[parsed.format] || parsed.format}`,
         `识别到 ${items.length.toLocaleString()} 句（${items.filter((item) => item.translation).length.toLocaleString()} 句有翻译）`
@@ -1264,18 +1433,25 @@ const fallbackSentences = [
       $("importNameInput").disabled = target !== "new";
       $("importAppendSelect").disabled = target !== "append";
       $("importDuplicateOptions").disabled = target !== "append";
+      $("importDriveNote").textContent = state.cloudUser
+        ? `导入后会自动备份到你的 Google Drive「langLSRW/libraries」${googleDrive.hasToken() ? "" : "（当前未连接，点用户菜单里的「立即同步」后上传）"}。`
+        : "句库只保存在这台设备的浏览器里；用 Google 登录后可以同步到你自己的 Google Drive。";
       $("confirmImportBtn").disabled = !items.length;
     }
 
-    async function openImportDialog({ text = "", filename = "", name, source }) {
-      const parsed = importer.parseImport(text, filename);
-      if (!parsed.items.length) {
+    async function openImportDialog({ text = "", rows = null, sheet = null, filename = "", name, source }) {
+      const layout = rows ? importer.guessSheetLayout(rows) : null;
+      const parsed = rows ? importer.rowsToItems(rows, layout) : importer.parseImport(text, filename);
+      if (!parsed.items.length && !rows?.length) {
         alert("没有识别到可练习的句子。推荐格式：每行一句，用「|」分隔两种语言，例如：Hello | 你好");
         return false;
       }
-      fillTranslationsFromCache(parsed.items);
+      if (!rows) fillTranslationsFromCache(parsed.items);
       await reloadMyLibraries();
-      state.pendingImport = { parsed, source };
+      state.pendingImport = { parsed, source, rows, sheet };
+      $("importSheetOptions").hidden = !rows;
+      $("importSwapRow").hidden = Boolean(rows);
+      if (rows) renderSheetColumnOptions(rows, layout);
       closeLibraryModal();
       closeTopMenus();
       // Re-importing a file with the same name most likely means "add to it".
@@ -1300,12 +1476,13 @@ const fallbackSentences = [
       state.pendingImport = null;
     }
 
-    async function createLibrary({ name, source, items }) {
+    async function createLibrary({ name, source, items, sheet = null }) {
       const now = new Date().toISOString();
       return libraryStore.put(libraryOwner(), {
         id: libraryStore.newId(),
         name: String(name || "未命名句库").trim().slice(0, 80) || "未命名句库",
         source: source || "",
+        sheet,
         language: state.learningLanguageId,
         createdAt: now,
         updatedAt: now,
@@ -1317,6 +1494,7 @@ const fallbackSentences = [
       if (!state.pendingImport) return;
       const items = importItems();
       const { source } = state.pendingImport;
+      const sheet = state.pendingImport.sheet ? { ...state.pendingImport.sheet, ...sheetLayoutFromDialog() } : null;
       const target = document.querySelector('input[name="importTarget"]:checked').value;
       const duplicates = document.querySelector('input[name="importDuplicates"]:checked').value;
       $("confirmImportBtn").disabled = true;
@@ -1324,18 +1502,13 @@ const fallbackSentences = [
         let library;
         let message;
         if (target === "append") {
-          const current = state.libraries.find((item) => item.id === $("importAppendSelect").value);
-          if (!current) return;
-          const merged = importer.mergeItems(current.items, items, { duplicates });
-          library = await libraryStore.put(libraryOwner(), {
-            ...current,
-            items: merged.items,
-            source: [...new Set([current.source, source].filter(Boolean))].join("、").slice(0, 200),
-            updatedAt: new Date().toISOString()
-          });
-          message = `已追加到「${library.name}」：新增 ${merged.added.toLocaleString()} 句，重复 ${merged.duplicates.toLocaleString()} 句${merged.translationsUpdated ? `（${merged.translationsUpdated.toLocaleString()} 句更新了翻译）` : ""}，现在共 ${merged.items.length.toLocaleString()} 句。`;
+          const report = await appendToLibrary($("importAppendSelect").value, items, { duplicates, source, sheet });
+          if (!report) return;
+          library = report.library;
+          message = `已追加到「${library.name}」：新增 ${report.added.toLocaleString()} 句，重复 ${report.duplicates.toLocaleString()} 句${report.translationsUpdated ? `（${report.translationsUpdated.toLocaleString()} 句更新了翻译）` : ""}，现在共 ${report.total.toLocaleString()} 句。`;
         } else {
-          library = await createLibrary({ name: $("importNameInput").value, source, items });
+          library = await createLibrary({ name: $("importNameInput").value, source, items, sheet });
+          scheduleCloudSync(500);
           message = `已新建句库「${library.name}」：${library.items.length.toLocaleString()} 句。`;
         }
         closeImportDialog();
@@ -1347,6 +1520,100 @@ const fallbackSentences = [
       } catch (error) {
         $("confirmImportBtn").disabled = false;
         alert(`导入失败：${error.message || error}`);
+      }
+    }
+
+    // Merges sentences into a library (new ones appended, translations merged); returns a report, or null.
+    async function appendToLibrary(id, items, { duplicates = "merge", source = "", sheet = null } = {}) {
+      const current = state.libraries.find((item) => item.id === id);
+      if (!current) return null;
+      const merged = importer.mergeItems(current.items, items, { duplicates });
+      const linkChanged = sheet && importer.encodeSheetLink(sheet) !== importer.encodeSheetLink(current.sheet);
+      let library = current;
+      if (merged.added || merged.translationsUpdated || linkChanged) {
+        library = await libraryStore.put(libraryOwner(), {
+          ...current,
+          items: merged.items,
+          source: [...new Set([current.source, source].filter(Boolean))].join("、").slice(0, 200),
+          sheet: sheet || current.sheet || null,
+          updatedAt: new Date().toISOString()
+        });
+        scheduleCloudSync(500);
+      }
+      return { library, total: merged.items.length, ...merged };
+    }
+
+    // ---- Google Sheets: paste a link (optional) -> Google Picker -> read the tab -> import preview. Picking the
+    // file in Google's Picker is what grants this app (drive.file) read access to that one spreadsheet.
+    function sheetUrl(sheet) {
+      return `https://docs.google.com/spreadsheets/d/${sheet.id}/edit${sheet.gid !== "" ? `#gid=${sheet.gid}` : ""}`;
+    }
+
+    async function importFromSheet() {
+      if (!state.cloudUser) {
+        alert("从 Google 表格导入需要先用 Google 登录。");
+        return;
+      }
+      const value = $("sheetUrlInput").value.trim();
+      const link = value ? importer.parseSheetUrl(value) : null;
+      if (value && !link) {
+        alert("没认出表格链接。请粘贴浏览器地址栏里的 Google 表格网址，例如 https://docs.google.com/spreadsheets/d/…/edit#gid=0");
+        return;
+      }
+      $("sheetImportBtn").disabled = true;
+      try {
+        const picked = await googleDrive.pickSpreadsheet(link?.id || "");
+        renderCloudAuthState();
+        if (!picked) return;
+        const data = await googleDrive.readSheet(picked.id, picked.id === link?.id ? link.gid : "");
+        const opened = await openImportDialog({
+          rows: data.rows,
+          sheet: { id: picked.id, gid: data.gid },
+          name: data.title || picked.name,
+          source: `Google 表格：${data.title || picked.name} · ${data.tabTitle}`
+        });
+        if (opened) $("sheetUrlInput").value = "";
+      } catch (error) {
+        alert(`读取 Google 表格失败：${error.message || error}`);
+      } finally {
+        $("sheetImportBtn").disabled = false;
+      }
+    }
+
+    // Re-reads the linked sheet and merges it in. If access is missing (e.g. the link came from another account),
+    // the user picks the file again.
+    async function updateFromSheet(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library?.sheet) return;
+      if (!state.cloudUser) {
+        alert("从表格更新需要先用 Google 登录。");
+        return;
+      }
+      $("librarySheetUpdateBtn").disabled = true;
+      try {
+        if (!googleDrive.hasToken()) await googleDrive.reconnect();
+        renderCloudAuthState();
+        let data;
+        try {
+          data = await googleDrive.readSheet(library.sheet.id, library.sheet.gid);
+        } catch (error) {
+          if (error.status !== 403 && error.status !== 404) throw error;
+          const picked = await googleDrive.pickSpreadsheet(library.sheet.id);
+          if (!picked) return;
+          data = await googleDrive.readSheet(library.sheet.id, library.sheet.gid);
+        }
+        const result = importer.rowsToItems(data.rows, library.sheet);
+        const report = await appendToLibrary(id, result.items, { source: `Google 表格：${data.title} · ${data.tabTitle}` });
+        await loadCommonLibrary();
+        if (state.activeLibraryId === id && state.currentLibraryLabel === "我的句库") {
+          practiceLibrary(report.library, state.index);
+          render();
+        }
+        alert(`已从表格更新「${report.library.name}」：新增 ${report.added.toLocaleString()} 句${report.translationsUpdated ? `，${report.translationsUpdated.toLocaleString()} 句补充了翻译` : ""}，现在共 ${report.total.toLocaleString()} 句。`);
+      } catch (error) {
+        alert(`从表格更新失败：${error.message || error}`);
+      } finally {
+        $("librarySheetUpdateBtn").disabled = false;
       }
     }
 
@@ -9065,6 +9332,20 @@ ${orderNote}`;
       const file = event.target.files?.[0];
       if (file) installDictionary(event.target.dataset.dictionaryId || "ecdict", file);
     });
+    $("sheetImportBtn").addEventListener("click", importFromSheet);
+    $("sheetUrlInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") importFromSheet();
+    });
+    $("librarySheetUpdateBtn").addEventListener("click", () => updateFromSheet(state.library.selectedId));
+    $("librarySheetOpenBtn").addEventListener("click", () => {
+      const library = state.libraries.find((item) => item.id === state.library.selectedId);
+      if (library?.sheet) window.open(sheetUrl(library.sheet), "_blank", "noopener");
+    });
+    ["importTextColumn", "importTranslationColumn", "importHeaderToggle"].forEach((id) => {
+      $(id).addEventListener("change", () => {
+        if (state.pendingImport) renderImportDialog();
+      });
+    });
     $("clearTranslationCacheBtn").addEventListener("click", clearTranslationCache);
     $("openLibraryBtn").addEventListener("click", openLibraryModal);
     $("openDictionaryLibraryBtn").addEventListener("click", openDictionaryLibrary);
@@ -10005,5 +10286,6 @@ ${orderNote}`;
       }
       await tryLoadDefaultLibrary();
       render();
+      userData.onChange(() => scheduleCloudSync());
       initializeCloudAuth();
     })();

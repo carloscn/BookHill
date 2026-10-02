@@ -6000,3 +6000,48 @@
   border-top: 1px solid var(--line, #d1d5db);
   padding: 10px 14px;
 }
+
+    /* Google Sheets import (import tab) */
+    .sheet-import {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+      border: 1px solid var(--line, #d1d5db);
+      border-radius: 8px;
+    }
+
+    .sheet-import-title {
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .sheet-import-guest {
+      display: none;
+    }
+
+    .sheet-import.is-guest input,
+    .sheet-import.is-guest button {
+      display: none;
+    }
+
+    .sheet-import.is-guest .sheet-import-guest {
+      display: block;
+    }
+
+    .import-options[hidden],
+    #importSwapRow[hidden] {
+      display: none;
+    }
+
+    .import-drive-note {
+      padding: 0 16px;
+    }
+
+    .import-drive-note:empty {
+      display: none;
+    }
+
+    .cloud-login-note {
+      max-width: 260px;
+      text-align: center;
+    }
