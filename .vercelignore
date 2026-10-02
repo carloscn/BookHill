@@ -1,4 +1,0 @@
-node_modules/
-.agents/
-tools/__pycache__/
-assets/dictionaries/runtime/ecdict/*.sqlite

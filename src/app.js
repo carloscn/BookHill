@@ -128,8 +128,6 @@ const fallbackSentences = [
         // Word review wording: the word's language and the language of its dictionary meanings.
         wordLabel: "英文",
         meaningLabel: "中文",
-        commonLibraryManifestUrl: "assets/libraries/common-english-30150/manifest.json",
-        commonLibraryContent: "英文原句 + 中文翻译",
         accents: [["en-GB", "英音"], ["en-US", "美音"]],
         sentenceFavoritesEnabled: true,
         grammarAnalysisEnabled: true
@@ -148,8 +146,6 @@ const fallbackSentences = [
         reviewDistractorCategory: "top3000",
         wordLabel: "西语",
         meaningLabel: "英文",
-        commonLibraryManifestUrl: "assets/libraries/common-spanish-134910/manifest.json",
-        commonLibraryContent: "西语原句 + 英文翻译",
         // Accent regions for TTS voices and speech recognition; materials and records are not region-specific yet.
         accents: [["es-ES", "西班牙"], ["es-MX", "墨西哥"], ["es-US", "美国"], ["es-AR", "阿根廷"], ["es-CO", "哥伦比亚"], ["es-CL", "智利"]],
         sentenceFavoritesEnabled: true,
@@ -158,17 +154,28 @@ const fallbackSentences = [
       }
     };
 
+    // lang_srw stored a signed-in Google account as the user "google:<sub>"; that is now the cloud identity,
+    // restored from the saved Google profile, so it must not come back as a local user.
+    function legacyCurrentUser() {
+      const user = localStorage.getItem("langLSRWCurrentUser") || "";
+      if (!user.startsWith("google:")) return user;
+      localStorage.removeItem("langLSRWCurrentUser");
+      return "";
+    }
+
     const state = {
       sentences: normalizeSentenceList(fallbackSentences),
+      libraries: [], // the current identity's own libraries for the current learning language
+      activeLibraryId: "",
+      pendingImport: null,
       index: 0,
       events: [],
       startedAt: 0,
       finished: false,
-      currentUser: localStorage.getItem("langLSRWCurrentUser") || "",
+      currentUser: legacyCurrentUser(),
       cloudUser: null,
       cloudSyncing: false,
       cloudLastSyncedAt: "",
-      cloudSwitchingToLocal: false,
       dictionaryLookupEntry: null,
       dictionaryLibraryPage: 1,
       dictionaryLibraryPageCount: 1,
@@ -362,7 +369,7 @@ const fallbackSentences = [
 
     function syncCurrentLibrarySelect(label) {
       const select = $("currentLibrarySelect");
-      const isCommon = label === "常用句库";
+      const isCommon = label === "我的句库";
       const isFavorites = label === "用户收藏";
       const isAudio = label === "音频字幕";
       let customOption = select.querySelector('option[value="custom"]');
@@ -443,11 +450,14 @@ const fallbackSentences = [
     async function openUserData() {
       await userData.open(userDataIdentity());
       applyIdentitySettings();
+      renderWordListCategoryOptions();
     }
 
     // After an import or a cloud download changed the open identity's records.
     function refreshAfterUserDataChange() {
       applyIdentitySettings();
+      dictionaryStudyDeckCache.clear();
+      renderWordListCategoryOptions();
       render();
       if (!$("userPhrasesModal").hidden) renderUserPhrases();
       refreshWordReviewStatusIcons();
@@ -456,9 +466,14 @@ const fallbackSentences = [
     }
 
     function saveLastPosition() {
+      const previous = loadLastPosition();
+      const positions = { ...(previous?.positions || {}) };
+      if (state.currentLibraryLabel === "我的句库" && state.activeLibraryId) positions[state.activeLibraryId] = state.index;
       userData.put("position", "last", {
         libraryLabel: state.currentLibraryLabel,
-        index: state.index
+        libraryId: state.currentLibraryLabel === "我的句库" ? state.activeLibraryId : "",
+        index: state.index,
+        positions
       }, languageScope());
     }
 
@@ -468,7 +483,8 @@ const fallbackSentences = [
     }
 
     function getKnownUsers() {
-      return JSON.parse(localStorage.getItem("langLSRWKnownUsers") || "[]");
+      // The previous app version listed Google accounts as "google:<sub>" users; those are now cloud identities.
+      return JSON.parse(localStorage.getItem("langLSRWKnownUsers") || "[]").filter((user) => !String(user).startsWith("google:"));
     }
 
     function saveKnownUser(name) {
@@ -502,12 +518,10 @@ const fallbackSentences = [
       return librarySentenceMap.map.get(String(id)) || null;
     }
 
-    function librarySentenceRef(item) {
-      const normalized = normalizeSentenceItem(item);
-      const libraryId = state.library.manifest?.id;
-      if (normalized.id && libraryId && normalized.libraryId === libraryId && state.library.fingerprint && librarySentenceById(normalized.id)) {
-        return { lib: libraryId, id: normalized.id, lf: state.library.fingerprint };
-      }
+    // Libraries are the user's own (imported, appendable, synced), so a library id + sentence id +
+    // fingerprint reference would go stale on the next append. Sentences are always stored as text;
+    // references written by the old built-in libraries simply no longer resolve.
+    function librarySentenceRef() {
       return null;
     }
 
@@ -540,74 +554,202 @@ const fallbackSentences = [
       scheduleCloudSync();
     }
 
-    const AUTO_CLOUD_SYNC_ENABLED = false;
-    let cloudSyncTimer = 0;
+    // ---- Google sign-in + Drive sync (src/google-drive.js, src/cloud-sync.js) ----------------------------------
+    // A Google account is the identity "cloud:<sub>". Its records and libraries live in this browser like any
+    // identity's, and are mirrored to the user's own Drive: langLSRW/langlsrw-userdata.json (the personal data
+    // document, merged record by record, newer wins) and langLSRW/libraries/*.tsv. Nothing is kept on our server.
+    // Google's token model needs a click to (re)connect, so after a reload sync waits for 「立即同步」.
+    const googleDrive = window.langLSRWGoogleDrive;
+    const cloudSync = window.langLSRWCloudSync;
+    const cloud = { running: null, timer: 0, due: 0, again: false, status: "" };
+    const CLOUD_SYNC_DELAY = 8000;
 
     function cloudDisplayName(user = state.cloudUser) {
       if (!user) return "";
-      return String(user.user_metadata?.full_name || user.user_metadata?.name || user.email || "Google 用户");
+      return String(user.name || user.email || "Google 用户");
     }
 
     function renderCloudAuthState(message = "") {
-      const configured = Boolean(window.langLSRWCloudAuth?.isConfigured());
+      const configured = googleDrive.isConfigured();
       const signedIn = Boolean(state.cloudUser);
+      if (message) cloud.status = message;
       $("cloudUserMenuSection").hidden = !signedIn;
       $("localUserMenuSection").hidden = signedIn || !state.currentUser;
       $("googleLoginBtn").disabled = !configured || signedIn;
-      $("cloudLogoutBtn").disabled = !signedIn || state.cloudSyncing;
-      $("syncCloudBtn").disabled = !signedIn || state.cloudSyncing;
+      $("cloudLogoutBtn").disabled = !signedIn;
+      $("syncCloudBtn").disabled = !signedIn || Boolean(cloud.running);
       $("clearUserBtn").disabled = signedIn || !state.currentUser;
       $("clearUserBtn").title = signedIn ? "请先退出 Google 登录" : "删除当前浏览器中的本机用户和练习记录";
-      $("cloudLoginStatus").textContent = message || (signedIn
+      $("cloudLoginStatus").textContent = signedIn
         ? `已登录：${cloudDisplayName()}`
-        : configured ? "" : "云登录未配置");
+        : (message || (configured ? "" : "云登录未配置"));
       $("cloudAccountStatus").textContent = signedIn
-        ? `${cloudDisplayName()}${state.cloudLastSyncedAt ? ` · 云端保存 ${new Date(state.cloudLastSyncedAt).toLocaleString()}` : " · 尚未保存"}`
+        ? `${cloudDisplayName()}${state.cloudUser.email && state.cloudUser.email !== cloudDisplayName() ? `（${state.cloudUser.email}）` : ""} · ${cloud.status || (googleDrive.hasToken() ? "已连接" : "未连接")}`
         : "未登录云账号";
       if (signedIn) $("userBadge").textContent = `用户：${cloudDisplayName()}`;
     }
 
-    // The cloud row carries the same personal data document as a backup export.
-    function collectCloudPayload() {
-      return userData.exportDocument({ identity: userDataIdentityMeta() });
+    function libraryTombstoneKey(owner = libraryOwner()) {
+      return `langLSRWLibraryTombstones:${owner}`;
     }
 
-    function applyCloudPayload(payload) {
-      if (!userData.isDocument(payload)) return;
-      state.cloudSyncing = true;
+    function loadLibraryTombstones(owner = libraryOwner()) {
       try {
-        userData.importDocument(payload);
-      } finally {
-        state.cloudSyncing = false;
+        const ids = JSON.parse(localStorage.getItem(libraryTombstoneKey(owner)) || "[]");
+        return Array.isArray(ids) ? ids : [];
+      } catch {
+        return [];
       }
-      refreshAfterUserDataChange();
     }
 
-    async function pushCloudState() {
-      if (!state.cloudUser || state.cloudSyncing) return;
-      state.cloudSyncing = true;
-      renderCloudAuthState("正在保存到云端...");
-      try {
-        state.cloudLastSyncedAt = await window.langLSRWCloudAuth.saveState(state.cloudUser.id, collectCloudPayload());
-        renderCloudAuthState("已保存到云端");
-      } catch (error) {
-        renderCloudAuthState(`云端保存失败：${error.message || error}`);
-      } finally {
-        state.cloudSyncing = false;
+    // Returns the ids of libraries whose content or existence changed on this device.
+    async function syncLibraries(owner) {
+      const local = await libraryStore.list(owner);
+      const tombstones = loadLibraryTombstones(owner);
+      const plan = cloudSync.planLibrarySync({ local, remote: await googleDrive.listLibraries(), tombstones });
+      const localById = new Map(local.map((library) => [library.id, library]));
+      const changed = new Set();
+      for (const fileId of plan.trashRemote) await googleDrive.trashFile(fileId);
+      for (const id of plan.deleteLocal) {
+        await libraryStore.remove(owner, id);
+        changed.add(id);
+      }
+      for (const { id, name, fileId } of plan.rename) {
+        await libraryStore.put(owner, { ...localById.get(id), name, driveFileId: fileId });
+        changed.add(id);
+      }
+      for (const file of plan.download) {
+        const existing = localById.get(file.libraryId);
+        await libraryStore.put(owner, {
+          id: file.libraryId,
+          name: file.name,
+          source: existing?.source || "Google Drive",
+          language: file.language || existing?.language || "en",
+          sheet: file.sheet || existing?.sheet || null,
+          createdAt: existing?.createdAt || file.updatedAt,
+          updatedAt: file.updatedAt,
+          items: importer.parseTsvLibrary(await googleDrive.downloadLibrary(file.fileId), { hasIdColumn: true }),
+          driveFileId: file.fileId
+        });
+        changed.add(file.libraryId);
+      }
+      for (const { library, fileId } of plan.upload) {
+        const { user: _owner, count: _count, ...record } = library;
+        const driveFileId = await googleDrive.uploadLibrary(fileId, record, cloudSync.libraryToTsv(record.items));
+        // Re-read: the library may have been edited while it uploaded.
+        const latest = await libraryStore.get(owner, library.id);
+        if (latest) await libraryStore.put(owner, { ...latest, driveFileId });
+      }
+      const remaining = loadLibraryTombstones(owner).filter((id) => !tombstones.includes(id));
+      localStorage.setItem(libraryTombstoneKey(owner), JSON.stringify(remaining));
+      return changed;
+    }
+
+    // After a sync changed libraries: refresh the list, and the practice view when its library changed or went away.
+    async function refreshLibrariesAfterSync(changed) {
+      await reloadMyLibraries();
+      if (!$("libraryModal").hidden) await loadCommonLibrary();
+      const active = state.libraries.find((library) => library.id === state.activeLibraryId);
+      if (state.currentLibraryLabel === "我的句库" && active && changed.has(active.id)) {
+        practiceLibrary(active, state.index);
+        render();
+      } else if (!active && (state.activeLibraryId || state.libraries.length)) {
+        state.activeLibraryId = "";
+        await tryLoadDefaultLibrary();
+        render();
+      }
+    }
+
+    async function syncWithCloud({ interactive = false } = {}) {
+      if (!state.cloudUser) return;
+      if (cloud.running) {
+        // Something changed mid-sync: run once more when this one finishes.
+        cloud.again = true;
+        return cloud.running;
+      }
+      clearTimeout(cloud.timer);
+      cloud.timer = 0;
+      const run = async () => {
+        const identity = userDataIdentity();
+        try {
+          if (!googleDrive.hasToken()) {
+            if (!interactive) {
+              renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
+              return;
+            }
+            await googleDrive.reconnect();
+          }
+          renderCloudAuthState("正在同步…");
+          await userData.flush();
+          const changedLibraries = await syncLibraries(libraryOwner());
+          if (identity !== userDataIdentity()) return;
+          const remote = await googleDrive.pull();
+          if (identity !== userDataIdentity()) return;
+          let counts = { added: 0, updated: 0 };
+          if (userData.isDocument(remote)) {
+            state.cloudSyncing = true;
+            try {
+              counts = userData.importDocument(remote);
+            } finally {
+              state.cloudSyncing = false;
+            }
+          }
+          if (counts.added || counts.updated) refreshAfterUserDataChange();
+          if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
+          const local = userData.exportDocument({ identity: userDataIdentityMeta() });
+          if (!cloudSync.sameDocument(local, remote)) await googleDrive.push(local);
+          state.cloudLastSyncedAt = new Date().toISOString();
+          const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+          renderCloudAuthState(`已同步 · ${time}`);
+        } catch (error) {
+          renderCloudAuthState(error.code === "token_expired"
+            ? "连接已过期：点「立即同步」重新连接"
+            : `同步失败：${error.message || error}`);
+        }
+      };
+      // The lock is cleared in .finally(), which always runs after this assignment.
+      cloud.running = run().finally(() => {
+        cloud.running = null;
         renderCloudAuthState();
-      }
+        if (cloud.again) {
+          cloud.again = false;
+          scheduleCloudSync(0);
+        }
+      });
+      renderCloudAuthState();
+      return cloud.running;
     }
 
-    function scheduleCloudSync() {
-      if (!AUTO_CLOUD_SYNC_ENABLED || !state.cloudUser || state.cloudSyncing) return;
-      clearTimeout(cloudSyncTimer);
-      cloudSyncTimer = setTimeout(pushCloudState, 1200);
+    function pushCloudState() {
+      return syncWithCloud({ interactive: true });
+    }
+
+    function scheduleCloudSync(delay = CLOUD_SYNC_DELAY) {
+      if (!state.cloudUser || state.cloudSyncing || !googleDrive.hasToken()) return;
+      if (cloud.running) {
+        cloud.again = true;
+        return;
+      }
+      // Keep the earliest pending deadline: a library import (short delay) must not be pushed back by a later
+      // routine data change (long delay).
+      const due = Date.now() + delay;
+      if (cloud.timer && cloud.due <= due) return;
+      clearTimeout(cloud.timer);
+      cloud.due = due;
+      cloud.timer = setTimeout(() => {
+        cloud.timer = 0;
+        syncWithCloud();
+      }, delay);
     }
 
     function completeCloudSignOut(message = "已退出 Google") {
+      clearTimeout(cloud.timer);
+      cloud.timer = 0;
+      googleDrive.signOut();
       state.cloudUser = null;
       state.cloudLastSyncedAt = "";
       state.currentUser = "";
+      cloud.status = "";
       localStorage.removeItem("langLSRWCurrentUser");
       $("userBadge").textContent = "未登录";
       renderCloudAuthState(message);
@@ -615,64 +757,66 @@ const fallbackSentences = [
       showLogin();
     }
 
-    async function activateCloudUser(user) {
-      if (!user || state.cloudUser?.id === user.id) return;
-      state.cloudUser = user;
+    // Opens the Google identity. `carry` (optional) is the previous local identity's data to copy in.
+    async function activateCloudUser(profile, carry = null) {
+      state.cloudUser = { id: profile.sub, email: profile.email || "", name: profile.name || "" };
       state.currentUser = "";
       localStorage.removeItem("langLSRWCurrentUser");
       await openUserData();
-      renderCloudAuthState("正在读取云端数据...");
-      try {
-        const remote = await window.langLSRWCloudAuth.loadState(user.id);
-        if (remote?.payload) {
-          state.cloudLastSyncedAt = remote.updated_at || "";
-          applyCloudPayload(remote.payload);
+      if (carry) {
+        if (carry.document) userData.importDocument(carry.document);
+        const now = new Date().toISOString();
+        for (const { user: _owner, count: _count, driveFileId: _file, ...library } of carry.libraries) {
+          await libraryStore.put(libraryOwner(), { ...library, updatedAt: now });
         }
-        await tryLoadDefaultLibrary();
-        hideLogin();
-        render();
-      } catch (error) {
-        renderCloudAuthState(`云端读取失败，本地模式仍可使用：${error.message || error}`);
       }
+      await tryLoadDefaultLibrary();
+      hideLogin();
+      render();
+      renderCloudAuthState();
+    }
+
+    // Offers to copy the guest's / local user's libraries and records into the Google account being signed in.
+    async function dataToCarryIntoCloud(profile) {
+      if (state.cloudUser) return null;
+      const label = state.currentUser || "游客";
+      const libraries = await libraryStore.list(libraryOwner()).catch(() => []);
+      const document = userData.exportDocument({ identity: userDataIdentityMeta() });
+      const recordCount = [document.global, ...Object.values(document.languages || {})]
+        .reduce((sum, collections) => sum + Object.values(collections || {}).reduce((total, items) => total + Object.keys(items || {}).length, 0), 0);
+      if (!libraries.length && !recordCount) return null;
+      const parts = [libraries.length ? `${libraries.length} 个句库` : "", recordCount ? `${recordCount} 条学习记录` : ""].filter(Boolean).join("和");
+      const ok = await showAppConfirm(
+        `把「${label}」在本机的${parts}一起导入 Google 账号（${profile.email || profile.name}）吗？句库会上传到你的 Google Drive；本机的「${label}」保持不变。`,
+        { title: "导入本机数据", okText: "一起导入", cancelText: "不用" }
+      );
+      return ok ? { document: recordCount ? document : null, libraries } : null;
     }
 
     async function initializeCloudAuth() {
       renderCloudAuthState();
-      if (!window.langLSRWCloudAuth?.isConfigured()) return;
-      try {
-        window.langLSRWCloudAuth.onAuthStateChange((event, session) => {
-          if (session?.user) activateCloudUser(session.user);
-          if (event === "SIGNED_OUT") {
-            state.cloudUser = null;
-            state.cloudLastSyncedAt = "";
-            if (state.cloudSwitchingToLocal) return;
-            completeCloudSignOut();
-          }
-        });
-        const user = await window.langLSRWCloudAuth.getUser();
-        if (user) await activateCloudUser(user);
-      } catch (error) {
-        renderCloudAuthState(`云账号初始化失败：${error.message || error}`);
-      }
+      const profile = googleDrive.isConfigured() ? googleDrive.getProfile() : null;
+      if (!profile || state.currentUser) return;
+      await activateCloudUser(profile);
+      renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
     }
 
+    // Runs from the login button's click: Google opens its popup.
     async function signInWithGoogle() {
-      renderCloudAuthState("正在跳转到 Google...");
+      renderCloudAuthState("正在连接 Google…");
       try {
-        await window.langLSRWCloudAuth.signInWithGoogle();
+        const profile = await googleDrive.signIn({ selectAccount: true });
+        const carry = await dataToCarryIntoCloud(profile);
+        await activateCloudUser(profile, carry);
+        await syncWithCloud();
       } catch (error) {
         renderCloudAuthState(`登录失败：${error.message || error}`);
       }
     }
 
     async function signOutCloudUser() {
-      try {
-        clearTimeout(cloudSyncTimer);
-        await window.langLSRWCloudAuth.signOut();
-        if (state.cloudUser) completeCloudSignOut();
-      } catch (error) {
-        renderCloudAuthState(`退出失败：${error.message || error}`);
-      }
+      if (cloud.running) await cloud.running.catch(() => {});
+      completeCloudSignOut();
     }
 
     function normalizeSentenceItem(item) {
@@ -879,16 +1023,13 @@ const fallbackSentences = [
       const username = normalizeUsername(name);
       if (!username) return;
       if (state.cloudUser) {
-        clearTimeout(cloudSyncTimer);
-        state.cloudSwitchingToLocal = true;
-        try {
-          await window.langLSRWCloudAuth.signOut();
-        } catch {
-          // Local mode remains available even if the remote session cannot be closed.
-        }
+        if (cloud.running) await cloud.running.catch(() => {});
+        clearTimeout(cloud.timer);
+        cloud.timer = 0;
+        googleDrive.signOut();
         state.cloudUser = null;
         state.cloudLastSyncedAt = "";
-        state.cloudSwitchingToLocal = false;
+        cloud.status = "";
       }
       state.currentUser = username;
       localStorage.setItem("langLSRWCurrentUser", username);
@@ -994,12 +1135,46 @@ const fallbackSentences = [
       });
     }
 
-    function commonLibraryManifestUrl() {
-      return currentLearningLanguage().commonLibraryManifestUrl;
+    // ---- My libraries ---------------------------------------------------------
+    // Each identity's libraries live in IndexedDB (src/library-store.js), one per import, tagged with
+    // a learning language; imports go through the preview dialog (src/library-import.js). Nothing is
+    // fetched from the server.
+    const libraryStore = window.langLSRWLibraryStore;
+    const importer = window.langLSRWLibraryImport;
+
+    function libraryOwner() {
+      return userDataIdentity();
+    }
+
+    // The previous app version (lang_srw) kept libraries under the plain user name, or "google:<sub>" for a
+    // Google account. Copy them once to the identity that replaced that owner.
+    async function migrateLegacyLibraries(owner) {
+      const marker = `langLSRWLegacyLibrariesMigrated:${owner}`;
+      if (localStorage.getItem(marker)) return;
+      const legacyOwner = owner.startsWith("local:") ? owner.slice("local:".length)
+        : owner.startsWith("cloud:") ? `google:${owner.slice("cloud:".length)}` : "";
+      if (legacyOwner) {
+        for (const { user: _owner, count: _count, ...library } of await libraryStore.list(legacyOwner)) {
+          if (!(await libraryStore.get(owner, library.id))) await libraryStore.put(owner, { language: "en", ...library });
+        }
+      }
+      localStorage.setItem(marker, "1");
+    }
+
+    async function reloadMyLibraries() {
+      let all = [];
+      try {
+        await migrateLegacyLibraries(libraryOwner());
+        all = await libraryStore.list(libraryOwner());
+      } catch (error) {
+        $("libraryStatus").textContent = `读取本机句库失败：${error.message || error}`;
+      }
+      state.libraries = all.filter((library) => (library.language || "en") === state.learningLanguageId);
+      return state.libraries;
     }
 
     function resetCommonLibraryState() {
-      state.library.manifest = null;
+      state.library.selectedId = "";
       state.library.items = [];
       state.library.fingerprint = "";
       state.library.filteredItems = [];
@@ -1105,31 +1280,47 @@ const fallbackSentences = [
       renderLibraryPage();
     }
 
+    function libraryMetaText(library) {
+      const translated = library.items.filter((item) => item.translation).length;
+      const where = state.cloudUser ? (library.driveFileId ? " · 已存到 Google Drive" : " · 等待同步到 Google Drive") : " · 仅保存在本机";
+      return `${library.items.length.toLocaleString()} 句 · ${translated.toLocaleString()} 句有翻译${library.source ? ` · 来源 ${library.source}` : ""}${where}`;
+    }
+
+    function selectLibraryInModal(id) {
+      const library = state.libraries.find((item) => item.id === id) || null;
+      state.library.selectedId = library ? library.id : "";
+      state.library.items = library ? normalizeSentenceList(library.items) : [];
+      state.library.query = "";
+      state.library.page = 0;
+      $("librarySearchInput").value = "";
+      state.library.filteredItems = state.library.items;
+      renderMyLibraries();
+    }
+
+    function renderMyLibraries() {
+      const selected = state.libraries.find((item) => item.id === state.library.selectedId) || null;
+      $("myLibrarySelect").innerHTML = state.libraries.map((library) => (
+        `<option value="${escapeHtml(library.id)}">${escapeHtml(library.name)}${library.id === state.activeLibraryId ? "（练习中）" : ""}</option>`
+      )).join("");
+      $("myLibrarySelect").value = state.library.selectedId;
+      $("myLibrarySelect").hidden = !selected;
+      $("libraryEmpty").hidden = Boolean(selected);
+      $("libraryBrowse").hidden = !selected;
+      ["useLibraryBtn", "renameLibraryBtn", "exportLibraryBtn", "deleteLibraryBtn"].forEach((buttonId) => {
+        $(buttonId).disabled = !selected;
+      });
+      $("libraryMeta").textContent = selected ? libraryMetaText(selected) : `还没有${currentLearningLanguage().label}句库`;
+      $("useLibraryBtn").textContent = selected && selected.id === state.activeLibraryId ? "继续练习" : "使用此句库";
+      $("librarySheetUpdateBtn").hidden = !selected?.sheet;
+      $("librarySheetOpenBtn").hidden = !selected?.sheet;
+      $("sheetImportPanel").classList.toggle("is-guest", !state.cloudUser);
+      if (selected) renderLibraryPage();
+    }
+
     async function loadCommonLibrary() {
-      // Loading is tracked per learning language, so switching language during a load still loads the new library.
-      if (state.library.items.length || (state.library.loading && state.library.loadingLanguage === state.learningLanguageId)) return;
-      state.library.loading = true;
-      state.library.loadingLanguage = state.learningLanguageId;
-      $("libraryStatus").textContent = "正在加载常用句库...";
-      $("librarySentenceList").innerHTML = '<div class="empty">正在读取常用句库...</div>';
-      const languageId = state.learningLanguageId;
-      try {
-        const result = await window.langLSRWLibrary.load(commonLibraryManifestUrl());
-        if (state.learningLanguageId !== languageId) return;
-        state.library.manifest = result.manifest;
-        state.library.items = result.items;
-        state.library.fingerprint = textFingerprint(result.items.map((item) => `${item.id}\t${item.text}`).join("\n"));
-        state.library.filteredItems = result.items;
-        $("libraryName").textContent = result.manifest.name;
-        $("libraryMeta").textContent = `${result.items.length.toLocaleString()} 条 · ${currentLearningLanguage().commonLibraryContent} · v${result.manifest.version}`;
-        $("useLibraryBtn").disabled = false;
-        renderLibraryPage();
-      } catch (error) {
-        $("libraryStatus").textContent = `加载失败：${error.message || error}`;
-        $("librarySentenceList").innerHTML = '<div class="empty">请确认通过本地服务器打开网页，且句库文件完整。</div>';
-      } finally {
-        if (state.library.loadingLanguage === languageId) state.library.loading = false;
-      }
+      await reloadMyLibraries();
+      const keep = state.libraries.some((item) => item.id === state.library.selectedId);
+      selectLibraryInModal(keep ? state.library.selectedId : (state.activeLibraryId || state.libraries[0]?.id || ""));
     }
 
     async function openLibraryModal() {
@@ -1142,24 +1333,583 @@ const fallbackSentences = [
       $("librarySearchInput").focus();
     }
 
-    function useCommonLibrary() {
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      state.index = 0;
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+    function practiceLibrary(library, index) {
+      state.activeLibraryId = library.id;
+      state.sentences = normalizeSentenceList(library.items);
+      state.index = Number.isInteger(index) && index >= 0 && index < state.sentences.length ? index : 0;
+      setCurrentLibrary("我的句库", `当前句库：${library.name}（${state.sentences.length.toLocaleString()}句）`);
+      saveLastPosition();
+    }
+
+    function useCommonLibrary(id = state.library.selectedId) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      practiceLibrary(library, loadLastPosition()?.positions?.[library.id]);
       closeLibraryModal();
       resetCurrent(true);
     }
 
     function loadLibrarySentenceIntoPractice(id) {
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      const matchIndex = state.sentences.findIndex((item) => item.id === id);
-      state.index = Math.max(0, matchIndex);
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+      const library = state.libraries.find((item) => item.id === state.library.selectedId);
+      if (!library) return;
+      practiceLibrary(library, library.items.findIndex((item) => String(item.id) === String(id)));
       closeLibraryModal();
       setActivePage("listenPage");
       resetCurrent(true);
+    }
+
+    async function renameLibrary(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      const name = prompt("句库名称", library.name)?.trim();
+      if (!name || name === library.name) return;
+      await libraryStore.put(libraryOwner(), { ...library, name: name.slice(0, 80), updatedAt: new Date().toISOString() });
+      await loadCommonLibrary();
+      if (state.activeLibraryId === id) syncCurrentLibrarySelect(state.currentLibraryLabel);
+      scheduleCloudSync(500);
+    }
+
+    async function deleteLibrary(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      const where = state.cloudUser ? "本机和 Google Drive 里的这个句库都会删除（Drive 里的文件移到回收站）。" : "这台设备上的这个句库会被删除。";
+      if (!(await showAppConfirm(`确定删除句库「${library.name}」吗？${where}`, { title: "删除句库", okText: "删除" }))) return;
+      await libraryStore.remove(libraryOwner(), id);
+      if (library.driveFileId) {
+        localStorage.setItem(libraryTombstoneKey(), JSON.stringify([...new Set([...loadLibraryTombstones(), id])]));
+        scheduleCloudSync(500);
+      }
+      await loadCommonLibrary();
+      if (state.activeLibraryId === id) {
+        state.activeLibraryId = "";
+        await tryLoadDefaultLibrary();
+      }
+    }
+
+    function exportLibraryText(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      const blob = new Blob([importer.toPipeText(library.items)], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${library.name}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // ---- Import dialog (preview, new vs. append, duplicates) -------------------
+    const formatLabels = { pipe: "竖线「|」分隔", tsv: "Tab 分隔", lrc: "LRC 歌词", lines: "逐行", sheet: "表格" };
+
+    function sheetLayoutFromDialog() {
+      return {
+        textColumn: Number($("importTextColumn").value),
+        translationColumn: Number($("importTranslationColumn").value),
+        hasHeader: $("importHeaderToggle").checked
+      };
+    }
+
+    // Parsed result for the current dialog choices (columns for a sheet, the swap toggle for text files).
+    function currentImportResult() {
+      const pending = state.pendingImport;
+      if (pending.rows) return importer.rowsToItems(pending.rows, sheetLayoutFromDialog());
+      if (!$("importSwapToggle").checked) return pending.parsed;
+      return { ...pending.parsed, items: importer.mergeItems([], importer.swapColumns(pending.parsed.items)).items };
+    }
+
+    function importItems() {
+      return currentImportResult().items;
+    }
+
+    function columnName(index) {
+      return String.fromCharCode(65 + (index % 26)).repeat(Math.floor(index / 26) + 1);
+    }
+
+    function renderSheetColumnOptions(rows, layout) {
+      const width = Math.max(1, ...rows.map((row) => row.length));
+      const sample = rows[0] || [];
+      const options = Array.from({ length: width }, (_, index) => {
+        const hint = String(sample[index] ?? "").trim().slice(0, 16);
+        return `<option value="${index}">${columnName(index)} 列${hint ? `（${escapeHtml(hint)}）` : ""}</option>`;
+      }).join("");
+      $("importTextColumn").innerHTML = options;
+      $("importTranslationColumn").innerHTML = `<option value="-1">（没有翻译）</option>${options}`;
+      $("importTextColumn").value = String(layout.textColumn);
+      $("importTranslationColumn").value = String(layout.translationColumn);
+      $("importHeaderToggle").checked = layout.hasHeader;
+    }
+
+    function renderImportDialog() {
+      const { source } = state.pendingImport;
+      const parsed = currentImportResult();
+      const items = parsed.items;
+      const words = state.pendingImport.kind === "wordList";
+      const unit = words ? "个词" : "句";
+      const parts = [
+        `格式：${formatLabels[parsed.format] || parsed.format}`,
+        `识别到 ${items.length.toLocaleString()} ${unit}（${items.filter((item) => item.translation).length.toLocaleString()} ${unit}有${words ? "释义" : "翻译"}）`
+      ];
+      if (parsed.duplicatesInFile) parts.push(`文件内重复 ${parsed.duplicatesInFile.toLocaleString()} ${unit}已合并`);
+      if (parsed.skipped) parts.push(`跳过 ${parsed.skipped} 行`);
+      $("importSource").textContent = `${source} · 导入为${currentLearningLanguage().label}${words ? "词表" : "句库"}`;
+      $("importSummary").textContent = parts.join(" · ");
+      $("importPreview").innerHTML = items.slice(0, 8).map((item) => `
+        <div class="library-sentence-row import-row">
+          <span class="library-sentence-english">${escapeHtml(item.text)}</span>
+          <span class="library-sentence-translation">${escapeHtml(item.translation) || `<em>（无${words ? "释义" : "翻译"}）</em>`}</span>
+        </div>`).join("") + (items.length > 8 ? `<div class="small-note import-more">… 另外 ${(items.length - 8).toLocaleString()} ${unit}</div>` : "");
+      const target = document.querySelector('input[name="importTarget"]:checked').value;
+      $("importNameInput").disabled = target !== "new";
+      $("importAppendSelect").disabled = target !== "append";
+      $("importDuplicateOptions").disabled = target !== "append";
+      $("importDriveNote").textContent = words
+        ? (state.cloudUser ? "词表随你的学习数据一起同步到你的 Google Drive。" : "词表保存在这台设备的浏览器里；用 Google 登录后会随学习数据同步到你的 Google Drive。")
+        : state.cloudUser
+        ? `导入后会自动备份到你的 Google Drive「langLSRW/libraries」${googleDrive.hasToken() ? "" : "（当前未连接，点用户菜单里的「立即同步」后上传）"}。`
+        : "句库只保存在这台设备的浏览器里；用 Google 登录后可以同步到你自己的 Google Drive。";
+      $("confirmImportBtn").disabled = !items.length;
+    }
+
+    // kind "library" (句库, default) or "wordList" (我的词表 in 词库): same parsing, preview, append and de-dup.
+    async function openImportDialog({ text = "", rows = null, sheet = null, filename = "", name, source, kind = "library" }) {
+      const words = kind === "wordList";
+      const layout = rows ? importer.guessSheetLayout(rows) : null;
+      const parsed = rows ? importer.rowsToItems(rows, layout) : importer.parseImport(text, filename);
+      if (!parsed.items.length && !rows?.length) {
+        alert(words
+          ? "没有识别到单词。推荐格式：每行一个词，可以用「|」带上释义，例如：apple | 苹果"
+          : "没有识别到可练习的句子。推荐格式：每行一句，用「|」分隔两种语言，例如：Hello | 你好");
+        return false;
+      }
+      if (!rows && !words) fillTranslationsFromCache(parsed.items);
+      if (!words) await reloadMyLibraries();
+      state.pendingImport = { parsed, source, rows, sheet, kind };
+      $("importModalTitle").textContent = words ? `导入${currentLearningLanguage().label}词表` : "导入句库";
+      $("importNewLabel").textContent = words ? "新建词表" : "新建句库";
+      $("importAppendLabel").textContent = words ? "追加到已有词表" : "追加到已有句库";
+      $("importDuplicateLegend").textContent = words ? "追加时遇到已有的词（不区分大小写）" : "追加时遇到已有的句子（不区分大小写和空格）";
+      $("importSwapLabel").textContent = words ? "对调两列：把「|」右边的内容作为单词" : "对调两列：把「|」右边的内容作为练习句子";
+      $("importTextColumnLabel").textContent = words ? "单词" : "练习句子";
+      $("importTranslationColumnLabel").textContent = words ? "释义" : "翻译";
+      $("importSheetOptions").hidden = !rows;
+      $("importSwapRow").hidden = Boolean(rows);
+      if (rows) renderSheetColumnOptions(rows, layout);
+      if (!words) closeLibraryModal();
+      closeTopMenus();
+      // Re-importing a file with the same name most likely means "add to it".
+      const targets = words
+        ? wordLists().map((list) => ({ id: list.id, name: list.name, count: list.words.length }))
+        : state.libraries.map((library) => ({ id: library.id, name: library.name, count: library.items.length }));
+      const sameName = targets.find((item) => item.name === name);
+      $("importAppendSelect").innerHTML = targets.map((item) => (
+        `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}（${item.count.toLocaleString()} ${words ? "个词" : "句"}）</option>`
+      )).join("");
+      $("importAppendSelect").value = sameName?.id || (words ? wordListId($("dictionaryCategorySelect").value) : state.activeLibraryId) || targets[0]?.id || "";
+      if (!$("importAppendSelect").value) $("importAppendSelect").value = targets[0]?.id || "";
+      document.querySelector('input[name="importTarget"][value="append"]').disabled = !targets.length;
+      document.querySelector(`input[name="importTarget"][value="${sameName ? "append" : "new"}"]`).checked = true;
+      document.querySelector('input[name="importDuplicates"][value="merge"]').checked = true;
+      $("importNameInput").value = name;
+      $("importSwapToggle").checked = false;
+      renderImportDialog();
+      $("importModal").hidden = false;
+      $("confirmImportBtn").focus();
+      return true;
+    }
+
+    function closeImportDialog() {
+      $("importModal").hidden = true;
+      state.pendingImport = null;
+    }
+
+    async function createLibrary({ name, source, items, sheet = null }) {
+      const now = new Date().toISOString();
+      return libraryStore.put(libraryOwner(), {
+        id: libraryStore.newId(),
+        name: String(name || "未命名句库").trim().slice(0, 80) || "未命名句库",
+        source: source || "",
+        sheet,
+        language: state.learningLanguageId,
+        createdAt: now,
+        updatedAt: now,
+        items: items.map((item, index) => ({ id: String(item.id || index + 1), text: item.text, translation: item.translation || "" }))
+      });
+    }
+
+    async function confirmImport() {
+      if (!state.pendingImport) return;
+      const items = importItems();
+      const { source } = state.pendingImport;
+      const sheet = state.pendingImport.sheet ? { ...state.pendingImport.sheet, ...sheetLayoutFromDialog() } : null;
+      const target = document.querySelector('input[name="importTarget"]:checked').value;
+      const duplicates = document.querySelector('input[name="importDuplicates"]:checked').value;
+      $("confirmImportBtn").disabled = true;
+      if (state.pendingImport.kind === "wordList") {
+        try {
+          const message = target === "append"
+            ? wordListAppendMessage(appendToWordList($("importAppendSelect").value, items, { duplicates, source, sheet }))
+            : wordListCreateMessage(createWordList({ name: $("importNameInput").value, source, items, sheet }));
+          closeImportDialog();
+          alert(message);
+        } catch (error) {
+          $("confirmImportBtn").disabled = false;
+          alert(`导入失败：${error.message || error}`);
+        }
+        return;
+      }
+      try {
+        let library;
+        let message;
+        if (target === "append") {
+          const report = await appendToLibrary($("importAppendSelect").value, items, { duplicates, source, sheet });
+          if (!report) return;
+          library = report.library;
+          message = `已追加到「${library.name}」：新增 ${report.added.toLocaleString()} 句，重复 ${report.duplicates.toLocaleString()} 句${report.translationsUpdated ? `（${report.translationsUpdated.toLocaleString()} 句更新了翻译）` : ""}，现在共 ${report.total.toLocaleString()} 句。`;
+        } else {
+          library = await createLibrary({ name: $("importNameInput").value, source, items, sheet });
+          scheduleCloudSync(500);
+          message = `已新建句库「${library.name}」：${library.items.length.toLocaleString()} 句。`;
+        }
+        closeImportDialog();
+        await reloadMyLibraries();
+        const keepPosition = target === "append" && state.activeLibraryId === library.id;
+        practiceLibrary(library, keepPosition ? state.index : 0);
+        resetCurrent(!keepPosition);
+        alert(message);
+      } catch (error) {
+        $("confirmImportBtn").disabled = false;
+        alert(`导入失败：${error.message || error}`);
+      }
+    }
+
+    // Merges sentences into a library (new ones appended, translations merged); returns a report, or null.
+    async function appendToLibrary(id, items, { duplicates = "merge", source = "", sheet = null } = {}) {
+      const current = state.libraries.find((item) => item.id === id);
+      if (!current) return null;
+      const merged = importer.mergeItems(current.items, items, { duplicates });
+      const linkChanged = sheet && importer.encodeSheetLink(sheet) !== importer.encodeSheetLink(current.sheet);
+      let library = current;
+      if (merged.added || merged.translationsUpdated || linkChanged) {
+        library = await libraryStore.put(libraryOwner(), {
+          ...current,
+          items: merged.items,
+          source: [...new Set([current.source, source].filter(Boolean))].join("、").slice(0, 200),
+          sheet: sheet || current.sheet || null,
+          updatedAt: new Date().toISOString()
+        });
+        scheduleCloudSync(500);
+      }
+      return { library, total: merged.items.length, ...merged };
+    }
+
+    // ---- Google Sheets: paste a link (optional) -> Google Picker -> read the tab -> import preview. Picking the
+    // file in Google's Picker is what grants this app (drive.file) read access to that one spreadsheet.
+    function sheetUrl(sheet) {
+      return `https://docs.google.com/spreadsheets/d/${sheet.id}/edit${sheet.gid !== "" ? `#gid=${sheet.gid}` : ""}`;
+    }
+
+    async function importFromSheet() {
+      if (!state.cloudUser) {
+        alert("从 Google 表格导入需要先用 Google 登录。");
+        return;
+      }
+      const value = $("sheetUrlInput").value.trim();
+      const link = value ? importer.parseSheetUrl(value) : null;
+      if (value && !link) {
+        alert("没认出表格链接。请粘贴浏览器地址栏里的 Google 表格网址，例如 https://docs.google.com/spreadsheets/d/…/edit#gid=0");
+        return;
+      }
+      $("sheetImportBtn").disabled = true;
+      try {
+        const picked = await googleDrive.pickSpreadsheet(link?.id || "");
+        renderCloudAuthState();
+        if (!picked) return;
+        const data = await googleDrive.readSheet(picked.id, picked.id === link?.id ? link.gid : "");
+        const opened = await openImportDialog({
+          rows: data.rows,
+          sheet: { id: picked.id, gid: data.gid },
+          name: data.title || picked.name,
+          source: `Google 表格：${data.title || picked.name} · ${data.tabTitle}`
+        });
+        if (opened) $("sheetUrlInput").value = "";
+      } catch (error) {
+        alert(`读取 Google 表格失败：${error.message || error}`);
+      } finally {
+        $("sheetImportBtn").disabled = false;
+      }
+    }
+
+    // Re-reads the linked sheet and merges it in. If access is missing (e.g. the link came from another account),
+    // the user picks the file again.
+    async function updateFromSheet(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library?.sheet) return;
+      if (!state.cloudUser) {
+        alert("从表格更新需要先用 Google 登录。");
+        return;
+      }
+      $("librarySheetUpdateBtn").disabled = true;
+      try {
+        if (!googleDrive.hasToken()) await googleDrive.reconnect();
+        renderCloudAuthState();
+        let data;
+        try {
+          data = await googleDrive.readSheet(library.sheet.id, library.sheet.gid);
+        } catch (error) {
+          if (error.status !== 403 && error.status !== 404) throw error;
+          const picked = await googleDrive.pickSpreadsheet(library.sheet.id);
+          if (!picked) return;
+          data = await googleDrive.readSheet(library.sheet.id, library.sheet.gid);
+        }
+        const result = importer.rowsToItems(data.rows, library.sheet);
+        const report = await appendToLibrary(id, result.items, { source: `Google 表格：${data.title} · ${data.tabTitle}` });
+        await loadCommonLibrary();
+        if (state.activeLibraryId === id && state.currentLibraryLabel === "我的句库") {
+          practiceLibrary(report.library, state.index);
+          render();
+        }
+        alert(`已从表格更新「${report.library.name}」：新增 ${report.added.toLocaleString()} 句${report.translationsUpdated ? `，${report.translationsUpdated.toLocaleString()} 句补充了翻译` : ""}，现在共 ${report.total.toLocaleString()} 句。`);
+      } catch (error) {
+        alert(`从表格更新失败：${error.message || error}`);
+      } finally {
+        $("librarySheetUpdateBtn").disabled = false;
+      }
+    }
+
+    // ---- 我的词表: user word lists, one userData "wordList" record per list in the learning language's scope, so
+    // they follow the 英/西 switch and sync with the personal data document. Each list is a 词库 category
+    // ("wordlist:<id>"); the dictionary Worker filters entries to its words (src/dictionary/dictionary-service.js).
+    const WORD_LIST_PREFIX = "wordlist:";
+
+    function wordListId(category) {
+      const value = String(category || "");
+      return value.startsWith(WORD_LIST_PREFIX) ? value.slice(WORD_LIST_PREFIX.length) : "";
+    }
+
+    function wordLists(languageId = state.learningLanguageId) {
+      return userData.entries("wordList", languageScope(languageId))
+        .map(({ value }) => value)
+        .filter((list) => list && list.id && Array.isArray(list.words))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), "zh-CN"));
+    }
+
+    function wordList(id) {
+      const list = id ? userData.get("wordList", id, languageScope()) : null;
+      return list && Array.isArray(list.words) ? list : null;
+    }
+
+    // Stored compactly as [word] or [word, note]; the importer works on { text, translation } items.
+    function wordListItems(list) {
+      return (list?.words || []).map(([text, translation = ""]) => ({ text, translation }));
+    }
+
+    function compactWordItems(items) {
+      return items.map((item) => (item.translation ? [item.text, item.translation] : [item.text]));
+    }
+
+    const wordListSetCache = new Map();
+
+    function wordListWordSet(category) {
+      const list = wordList(wordListId(category));
+      if (!list) return new Set();
+      const cacheKey = `${list.id}:${list.updatedAt}`;
+      if (!wordListSetCache.has(cacheKey)) {
+        wordListSetCache.clear();
+        wordListSetCache.set(cacheKey, new Set(list.words.map(([word]) => String(word).trim().toLowerCase())));
+      }
+      return wordListSetCache.get(cacheKey);
+    }
+
+    // Category test for entries filtered in the page (favourites, 测验 filters): word lists by membership,
+    // built-in categories by the language's rules.
+    function matchesDictionaryCategory(item, category) {
+      if (wordListId(category)) return wordListWordSet(category).has(String(item?.word || "").trim().toLowerCase());
+      return languageDictionary().matchesCategory(item, category);
+    }
+
+    if (window.langLSRWDictionary) {
+      window.langLSRWDictionary.wordListResolver = (category) => (wordList(wordListId(category))?.words || []).map(([word]) => word);
+    }
+
+    // Appends the 「我的词表」 group to the 分类 menu for the current learning language.
+    function renderWordListCategoryOptions() {
+      const select = $("dictionaryCategorySelect");
+      const previous = select.value;
+      select.querySelectorAll("optgroup[data-word-lists]").forEach((group) => group.remove());
+      const lists = wordLists();
+      if (lists.length) {
+        const group = document.createElement("optgroup");
+        group.label = "我的词表";
+        group.dataset.wordLists = "";
+        group.innerHTML = lists.map((list) => (
+          `<option value="${WORD_LIST_PREFIX}${escapeHtml(list.id)}">${escapeHtml(list.name)}（${list.words.length.toLocaleString()}）</option>`
+        )).join("");
+        select.appendChild(group);
+      }
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+      else if (wordListId(previous) && select.options.length) select.value = select.options[0].value;
+      renderWordListActions();
+    }
+
+    function renderWordListActions() {
+      const list = wordList(wordListId($("dictionaryCategorySelect").value));
+      $("wordListManage").hidden = !list;
+      $("wordListSheetUpdateBtn").hidden = !list?.sheet;
+      $("wordListSheetBtn").title = state.cloudUser ? "从 Google 表格导入词表" : "从 Google 表格导入词表（需要先用 Google 登录）";
+    }
+
+    function saveWordList(list) {
+      userData.put("wordList", list.id, list, languageScope());
+      dictionaryStudyDeckCache.clear();
+      renderWordListCategoryOptions();
+      scheduleCloudSync(500);
+    }
+
+    // Shows a word list in the 词库 (opening it if needed).
+    function showWordListCategory(id) {
+      if ($("dictionaryLibraryModal").hidden) openDictionaryLibrary();
+      if (state.dictionaryLibraryType !== "words") setDictionaryLibraryType("words");
+      $("dictionaryCategorySelect").value = `${WORD_LIST_PREFIX}${id}`;
+      $("dictionaryCategorySelect").dispatchEvent(new Event("change"));
+    }
+
+    function createWordList({ name, source, items, sheet = null }) {
+      const now = new Date().toISOString();
+      const list = {
+        id: libraryStore.newId().replace(/^lib-/, "wl-"),
+        name: String(name || "未命名词表").trim().slice(0, 80) || "未命名词表",
+        source: source || "",
+        sheet,
+        createdAt: now,
+        updatedAt: now,
+        words: compactWordItems(importer.mergeItems([], items).items)
+      };
+      saveWordList(list);
+      showWordListCategory(list.id);
+      return list;
+    }
+
+    function appendToWordList(id, items, { duplicates = "merge", source = "", sheet = null } = {}) {
+      const current = wordList(id);
+      if (!current) throw new Error("找不到这个词表");
+      const merged = importer.mergeItems(wordListItems(current), items, { duplicates });
+      const linkChanged = sheet && importer.encodeSheetLink(sheet) !== importer.encodeSheetLink(current.sheet);
+      let list = current;
+      if (merged.added || merged.translationsUpdated || linkChanged) {
+        list = {
+          ...current,
+          words: compactWordItems(merged.items),
+          source: [...new Set([current.source, source].filter(Boolean))].join("、").slice(0, 200),
+          sheet: sheet || current.sheet || null,
+          updatedAt: new Date().toISOString()
+        };
+        saveWordList(list);
+      }
+      showWordListCategory(list.id);
+      return { list, total: merged.items.length, ...merged };
+    }
+
+    function wordListCreateMessage(list) {
+      return `已新建词表「${list.name}」：${list.words.length.toLocaleString()} 个词。词典里查不到的词不会出现在词库列表中。`;
+    }
+
+    function wordListAppendMessage(report) {
+      return `已追加到「${report.list.name}」：新增 ${report.added.toLocaleString()} 个词，重复 ${report.duplicates.toLocaleString()} 个${report.translationsUpdated ? `（${report.translationsUpdated.toLocaleString()} 个更新了释义）` : ""}，现在共 ${report.total.toLocaleString()} 个词。`;
+    }
+
+    async function importWordListFile(file) {
+      if (!file) return;
+      const text = await file.text();
+      await openImportDialog({ text, filename: file.name, name: file.name.replace(/\.[^.]+$/, ""), source: file.name, kind: "wordList" });
+    }
+
+    async function importWordListFromSheet() {
+      if (!state.cloudUser) {
+        alert("从 Google 表格导入需要先用 Google 登录。");
+        return;
+      }
+      $("wordListSheetBtn").disabled = true;
+      try {
+        const picked = await googleDrive.pickSpreadsheet("");
+        renderCloudAuthState();
+        if (!picked) return;
+        const data = await googleDrive.readSheet(picked.id, "");
+        await openImportDialog({
+          rows: data.rows,
+          sheet: { id: picked.id, gid: data.gid },
+          name: data.title || picked.name,
+          source: `Google 表格：${data.title || picked.name} · ${data.tabTitle}`,
+          kind: "wordList"
+        });
+      } catch (error) {
+        alert(`读取 Google 表格失败：${error.message || error}`);
+      } finally {
+        $("wordListSheetBtn").disabled = false;
+      }
+    }
+
+    async function updateWordListFromSheet() {
+      const list = wordList(wordListId($("dictionaryCategorySelect").value));
+      if (!list?.sheet) return;
+      if (!state.cloudUser) {
+        alert("从表格更新需要先用 Google 登录。");
+        return;
+      }
+      $("wordListSheetUpdateBtn").disabled = true;
+      try {
+        if (!googleDrive.hasToken()) await googleDrive.reconnect();
+        renderCloudAuthState();
+        let data;
+        try {
+          data = await googleDrive.readSheet(list.sheet.id, list.sheet.gid);
+        } catch (error) {
+          if (error.status !== 403 && error.status !== 404) throw error;
+          const picked = await googleDrive.pickSpreadsheet(list.sheet.id);
+          if (!picked) return;
+          data = await googleDrive.readSheet(list.sheet.id, list.sheet.gid);
+        }
+        const report = appendToWordList(list.id, importer.rowsToItems(data.rows, list.sheet).items, { source: `Google 表格：${data.title} · ${data.tabTitle}` });
+        alert(`已从表格更新「${report.list.name}」：新增 ${report.added.toLocaleString()} 个词${report.translationsUpdated ? `，${report.translationsUpdated.toLocaleString()} 个补充了释义` : ""}，现在共 ${report.total.toLocaleString()} 个词。`);
+      } catch (error) {
+        alert(`从表格更新失败：${error.message || error}`);
+      } finally {
+        $("wordListSheetUpdateBtn").disabled = false;
+      }
+    }
+
+    function renameWordList() {
+      const list = wordList(wordListId($("dictionaryCategorySelect").value));
+      if (!list) return;
+      const name = prompt("词表名称", list.name)?.trim();
+      if (!name || name === list.name) return;
+      saveWordList({ ...list, name: name.slice(0, 80), updatedAt: new Date().toISOString() });
+    }
+
+    function exportWordList() {
+      const list = wordList(wordListId($("dictionaryCategorySelect").value));
+      if (!list) return;
+      const blob = new Blob([importer.toPipeText(wordListItems(list))], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${list.name}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function deleteWordList() {
+      const list = wordList(wordListId($("dictionaryCategorySelect").value));
+      if (!list) return;
+      if (!(await showAppConfirm(`确定删除词表「${list.name}」吗？词表里单词的背词记录会保留。`, { title: "删除词表", okText: "删除" }))) return;
+      userData.remove("wordList", list.id, languageScope());
+      dictionaryStudyDeckCache.clear();
+      renderWordListCategoryOptions();
+      $("dictionaryCategorySelect").dispatchEvent(new Event("change"));
+      scheduleCloudSync(500);
     }
 
     // ---- Original-audio materials: an audio file plus a timed .lrc. Each sentence keeps its [start, end) seconds
@@ -1477,9 +2227,9 @@ const fallbackSentences = [
 
     // 音频字幕 panel: bundled audio + subtitle materials in assets/audio/. The audio is fetched whole into a Blob
     // because the local Python server does not answer HTTP Range requests, which seeking to each sentence needs.
-    const AUDIO_LIBRARY_MATERIALS = [
-      { id: "audio-example", languageId: "en", title: "Audio_Example", audio: "assets/audio/Audio_Example.m4a", subtitles: "assets/audio/Audio_Example.lrc" }
-    ];
+    // No audio is bundled or served: materials are imported by the user (audio + .lrc). The example that
+    // used to ship here lives in the repository's data/audio/ for anyone who wants to import it.
+    const AUDIO_LIBRARY_MATERIALS = [];
 
     function currentAudioLibraryMaterials() {
       const languageId = state.learningLanguageId || "en";
@@ -1955,28 +2705,21 @@ const fallbackSentences = [
 
     async function importSentenceFile(file) {
       if (!file) return false;
-      if (!/\.(txt|lrc)$/i.test(file.name) && !/^text\//i.test(file.type || "")) {
-        alert("请导入 .txt 或 .lrc 文件。");
+      if (!/\.(txt|lrc|tsv)$/i.test(file.name) && !/^text\//i.test(file.type || "")) {
+        alert("请导入 .txt、.lrc 或 .tsv 文件。");
         return false;
       }
-      const text = await file.text();
-      const sentences = parseSentences(text, file.name);
-      if (!sentences.length) {
-        alert("没有识别到可练习的句子。");
-        return false;
-      }
-      fillTranslationsFromCache(sentences);
-      state.sentences = sentences;
-      state.index = 0;
-      setCurrentLibrary("自定义句库", sentenceSourceLabel(file.name, sentences));
-      resetCurrent(true);
-      closeTopMenus();
-      return true;
+      return openImportDialog({
+        text: await file.text(),
+        filename: file.name,
+        name: file.name.replace(/\.(txt|lrc|tsv)$/i, ""),
+        source: file.name
+      });
     }
 
     async function tryLoadDefaultLibrary() {
       const lastPosition = loadLastPosition();
-      await loadCommonLibrary();
+      await reloadMyLibraries();
       if (lastPosition && lastPosition.libraryLabel === "用户收藏" && currentLearningLanguage().sentenceFavoritesEnabled) {
         const favorites = loadUserSentences();
         if (favorites.length) {
@@ -1994,13 +2737,18 @@ const fallbackSentences = [
           return;
         }
       }
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      state.index = (lastPosition && lastPosition.libraryLabel === "常用句库"
-        && Number.isInteger(lastPosition.index) && lastPosition.index >= 0 && lastPosition.index < state.sentences.length)
-        ? lastPosition.index
-        : 0;
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+      const library = state.libraries.find((item) => item.id === lastPosition?.libraryId) || state.libraries[0];
+      if (!library) {
+        // No library yet: a few built-in demo sentences (code, not server data) until the user imports.
+        state.activeLibraryId = "";
+        state.sentences = normalizeSentenceList(fallbackSentences);
+        state.index = 0;
+        setCurrentLibrary("示例句子", "还没有句库：现在是几句内置示例。打开「句库」导入你自己的句子。");
+        render();
+        return;
+      }
+      const index = lastPosition?.positions?.[library.id] ?? (lastPosition?.libraryId === library.id ? lastPosition.index : 0);
+      practiceLibrary(library, index);
       render();
     }
 
@@ -2665,7 +3413,7 @@ const fallbackSentences = [
         return `已安装 · ${count} 词条 · v${metadata?.dictionary_version || manifest?.version || "未知"}`;
       }
       if (manifest) {
-        return `未安装 · ${Number(manifest.entryCount).toLocaleString()} 词条 · 下载 ${formatBytes(manifest.downloadBytes || manifest.databaseBytes)} · 本地 ${formatBytes(manifest.databaseBytes)}`;
+        return `未安装 · ${Number(manifest.entryCount).toLocaleString()} 词条 · 文件 ${formatBytes(manifest.downloadBytes || manifest.databaseBytes)} · 安装后占用 ${formatBytes(manifest.databaseBytes)}`;
       }
       return "本地词典尚未准备好。";
     }
@@ -2682,7 +3430,9 @@ const fallbackSentences = [
         const item = byId.get(pkg.id) || dictionaryStatusResults.get(pkg.id) || { package: pkg };
         const installed = Boolean(item.installed);
         const busy = Boolean(dictionaryBusyId);
-        const installLabel = installed ? (item.updateAvailable ? "更新" : "重装") : "安装";
+        const installLabel = installed ? (item.updateAvailable ? "从文件更新" : "从文件重装") : "从文件安装";
+        const downloadUrl = window.langLSRWDictionary.downloadUrl(pkg.id);
+        const fileName = pkg.manifest?.file || "";
         const testWord = pkg.testWord || "dictionary";
         return `
           <div class="dictionary-settings-card" data-dictionary-card="${escapeHtml(pkg.id)}">
@@ -2693,7 +3443,8 @@ const fallbackSentences = [
             <div class="dictionary-status" data-dictionary-status>${escapeHtml(dictionaryStatusText(item))}</div>
             <progress class="dictionary-install-progress" data-dictionary-progress max="100" value="0" hidden></progress>
             <div class="dictionary-settings-actions">
-              <button type="button" data-dictionary-action="install" data-dictionary-id="${escapeHtml(pkg.id)}" title="${escapeHtml(installLabel)} ${escapeHtml(dictionaryPackageLabel(item))}" ${busy ? "disabled" : ""}>${installLabel}</button>
+              <a class="dictionary-download-link" href="${escapeHtml(downloadUrl)}" download title="从 GitHub 下载 ${escapeHtml(fileName)}">下载 ${escapeHtml(fileName)}</a>
+              <button type="button" data-dictionary-action="install" data-dictionary-id="${escapeHtml(pkg.id)}" title="选择已下载的 ${escapeHtml(fileName)}，安装${escapeHtml(dictionaryPackageLabel(item))}" ${busy ? "disabled" : ""}>${installLabel}</button>
               <button type="button" data-dictionary-action="test" data-dictionary-id="${escapeHtml(pkg.id)}" title="查询测试词：${escapeHtml(testWord)}" ${busy || !installed ? "disabled" : ""}>测试</button>
               <button type="button" data-dictionary-action="remove" data-dictionary-id="${escapeHtml(pkg.id)}" title="删除当前浏览器中安装的${escapeHtml(item.manifest?.name || pkg.id)}" ${busy || !installed ? "disabled" : ""}>删除</button>
             </div>
@@ -2721,8 +3472,16 @@ const fallbackSentences = [
       if (status) status.textContent = message;
     }
 
-    async function installDictionary(dictionaryId = "ecdict") {
+    function chooseDictionaryFile(dictionaryId) {
       if (!window.langLSRWDictionary || dictionaryBusyId) return;
+      const input = $("dictionaryFileInput");
+      input.dataset.dictionaryId = dictionaryId;
+      input.value = "";
+      input.click();
+    }
+
+    async function installDictionary(dictionaryId = "ecdict", file) {
+      if (!window.langLSRWDictionary || dictionaryBusyId || !file) return;
       const pkg = window.langLSRWDictionary.dictionary(dictionaryId);
       const card = dictionaryCard(dictionaryId);
       const progress = card?.querySelector("[data-dictionary-progress]");
@@ -2743,11 +3502,11 @@ const fallbackSentences = [
           currentProgress.value = received;
         }
         setDictionaryCardMessage(dictionaryId, total
-          ? `正在安装：${formatBytes(received)} / ${formatBytes(total)}`
+          ? `正在安装：${formatBytes(received)} / ${formatBytes(total)}（请勿关闭页面）`
           : `正在安装：${formatBytes(received)}`);
       });
       try {
-        await window.langLSRWDictionary.install(dictionaryId);
+        await window.langLSRWDictionary.install(dictionaryId, file);
         await refreshDictionaryStatus();
       } catch (error) {
         setDictionaryCardMessage(dictionaryId, `安装失败：${error.message || error}`);
@@ -3029,6 +3788,7 @@ const fallbackSentences = [
       applyLanguageSelectOptions("dictionarySortSelect", rules.librarySortOptions);
       applyLanguageSelectOptions("userWordsCategorySelect", rules.favoriteCategoryOptions);
       applyLanguageSelectOptions("userWordsSortSelect", rules.favoriteSortOptions);
+      renderWordListCategoryOptions();
       $("userWordsControls").querySelector(".word-review-launchers").hidden = !dictionaryWordStudyEnabled();
       $("userPhrasesList").classList.toggle("is-without-review-status", !dictionaryWordStudyEnabled());
       updateCurrentLibrarySelectAvailability();
@@ -3373,6 +4133,7 @@ ${orderNote}`;
         document.querySelector(".font-menu[open], .user-menu[open]")
         || !$("settingsModal").hidden
         || !$("libraryModal").hidden
+        || !$("importModal").hidden
         || !$("dictionaryLibraryModal").hidden
         || !$("userPhrasesModal").hidden
         || document.querySelector(".word-review-modal:not([hidden])")
@@ -3416,6 +4177,11 @@ ${orderNote}`;
       if (event.key === "Escape" && !$("settingsModal").hidden) {
         event.preventDefault();
         closeSettings();
+        return;
+      }
+      if (event.key === "Escape" && !$("importModal").hidden) {
+        event.preventDefault();
+        closeImportDialog();
         return;
       }
       // 单词练习: the 按住说话 shortcut holds the same recognition as the button (keydown starts, keyup stops).
@@ -4348,7 +5114,10 @@ ${orderNote}`;
           : state.dictionaryLibraryType === "phrases" ? "短语"
             : state.dictionaryLibraryType === "special" ? "特殊词条" : "单词";
         $("dictionaryLibraryCountText").textContent = `0 / ${result.total.toLocaleString()} 个${typeLabel}`;
-        $("dictionaryLibrarySummary").textContent = `${language.dictionaryName} · 每页 ${result.pageSize} 词`;
+        const customList = wordList(wordListId(category));
+        $("dictionaryLibrarySummary").textContent = customList
+          ? `${language.dictionaryName} · 词表「${customList.name}」${customList.words.length.toLocaleString()} 个词，词典收录 ${result.total.toLocaleString()} 个${typeLabel} · 每页 ${result.pageSize} 词`
+          : `${language.dictionaryName} · 每页 ${result.pageSize} 词`;
         $("dictionaryPageInput").value = result.page;
         $("dictionaryPageInput").max = result.pageCount;
         $("dictionaryPageCount").textContent = `/ ${result.pageCount.toLocaleString()} 页`;
@@ -4463,6 +5232,7 @@ ${orderNote}`;
       $("dictionaryLibraryList").classList.remove("is-keyboard-navigation");
       state.dictionaryLibraryPage = 1;
       state.dictionaryLibraryType = "words";
+      renderWordListCategoryOptions();
       setDictionaryLibraryType("words", false);
       $("dictionaryLibraryModal").hidden = false;
       requestAnimationFrame(() => {
@@ -4660,7 +5430,7 @@ ${orderNote}`;
       const records = isWordLearningFilter(learning) ? loadWordReviewRecords() : null;
       const marks = isWordLearningFilter(learning) ? loadWordManualMastery() : null;
       return loadUserWords()
-        .filter((item) => languageDictionary().matchesCategory(item, category))
+        .filter((item) => matchesDictionaryCategory(item, category))
         .filter((item) => !isWordLearningFilter(learning) || userWordMatchesLearningFilter(item, learning, records, marks))
         .filter((item) => !normalizedQuery || String(item.word || "").toLocaleLowerCase("en-US").includes(normalizedQuery))
         .sort((left, right) => (Number(right.rating) || 1) - (Number(left.rating) || 1)
@@ -4684,7 +5454,7 @@ ${orderNote}`;
         ? await loadDictionaryLearningFilterPage(category, learning, "alphabetical", query, page, normalizedPageSize, favoriteKeys)
         : await window.langLSRWDictionary.list(baseOptions, currentDictionaryId());
       const favoriteRows = sortDictionaryLearningItems((await window.langLSRWDictionary.queryMany(favoriteWords.map((item) => item.word), currentDictionaryId()))
-        .filter((item) => languageDictionary().matchesCategory(item, category)), "favorites");
+        .filter((item) => matchesDictionaryCategory(item, category)), "favorites");
       const total = favoriteRows.length + rest.total;
       const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
       const normalizedPage = Math.max(1, Math.min(Number(page) || 1, pageCount));
@@ -4708,7 +5478,7 @@ ${orderNote}`;
       const favoriteWords = dictionaryFavoriteWordsForCategory(category, learning);
       const favoriteKeys = favoriteWords.map((item) => dictionaryFavoriteKey(item.word));
       const favoriteRows = sortDictionaryLearningItems((await window.langLSRWDictionary.queryMany(favoriteWords.map((item) => item.word), currentDictionaryId()))
-        .filter((item) => languageDictionary().matchesCategory(item, category)), "favorites");
+        .filter((item) => matchesDictionaryCategory(item, category)), "favorites");
       const rest = isWordLearningFilter(learning)
         ? await loadDictionaryLearningFilterWords(category, learning, "alphabetical", favoriteKeys)
         : await window.langLSRWDictionary.studyList({ category, sort: "alphabetical", excludeWords: favoriteKeys }, currentDictionaryId());
@@ -4728,7 +5498,7 @@ ${orderNote}`;
       const excludeKeys = new Set(excludeWords.map((word) => dictionaryFavoriteKey(word)));
       return sortDictionaryLearningItems((await window.langLSRWDictionary.queryMany(keys, currentDictionaryId()))
         .filter((item) => !excludeKeys.has(dictionaryFavoriteKey(item.word)))
-        .filter((item) => languageDictionary().matchesCategory(item, category)), sort);
+        .filter((item) => matchesDictionaryCategory(item, category)), sort);
     }
 
     async function loadDictionaryLearningFilterPage(category, learning, sort, query, page, pageSize, excludeWords = []) {
@@ -4749,7 +5519,7 @@ ${orderNote}`;
       const excludeKeys = new Set(excludeWords.map((word) => dictionaryFavoriteKey(word)));
       const rows = sortDictionaryLearningItems((await window.langLSRWDictionary.queryMany(keys, currentDictionaryId()))
         .filter((item) => !excludeKeys.has(dictionaryFavoriteKey(item.word)))
-        .filter((item) => languageDictionary().matchesCategory(item, category)), sort);
+        .filter((item) => matchesDictionaryCategory(item, category)), sort);
       const normalizedPageSize = Math.max(20, Math.min(Number(pageSize) || 100, 200));
       const total = rows.length;
       const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
@@ -5043,7 +5813,7 @@ ${orderNote}`;
     }
 
     function userWordMatchesFilters(item, category, learning = "all", records, marks) {
-      return languageDictionary().matchesCategory(item, category)
+      return matchesDictionaryCategory(item, category)
         && (!isWordLearningFilter(learning) || userWordMatchesLearningFilter(item, learning, records, marks));
     }
 
@@ -8804,14 +9574,31 @@ ${orderNote}`;
       event.target.value = "";
     });
 
-    $("useTextBtn").addEventListener("click", () => {
-      const sentences = parseSentences($("sentenceInput").value);
-      if (!sentences.length) return;
-      fillTranslationsFromCache(sentences);
-      state.sentences = sentences;
-      state.index = 0;
-      setCurrentLibrary("自定义句库", sentenceSourceLabel("粘贴内容", sentences));
-      resetCurrent(true);
+    $("useTextBtn").addEventListener("click", async () => {
+      if (!$("sentenceInput").value.trim()) return;
+      const stamp = new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+      if (await openImportDialog({ text: $("sentenceInput").value, name: `粘贴内容 ${stamp}`, source: "粘贴" })) {
+        $("sentenceInput").value = "";
+      }
+    });
+    $("myLibrarySelect").addEventListener("change", (event) => selectLibraryInModal(event.target.value));
+    $("libraryImportBtn").addEventListener("click", () => $("libraryFileInput").click());
+    $("libraryFileInput").addEventListener("change", async (event) => {
+      const [file] = event.target.files;
+      event.target.value = "";
+      await importSentenceFile(file);
+    });
+    $("libraryEmptyImportBtn").addEventListener("click", () => $("libraryFileInput").click());
+    $("renameLibraryBtn").addEventListener("click", () => renameLibrary(state.library.selectedId));
+    $("deleteLibraryBtn").addEventListener("click", () => deleteLibrary(state.library.selectedId));
+    $("exportLibraryBtn").addEventListener("click", () => exportLibraryText(state.library.selectedId));
+    $("closeImportBtn").addEventListener("click", closeImportDialog);
+    $("importModal").addEventListener("pointerdown", (event) => {
+      if (event.target === $("importModal")) closeImportDialog();
+    });
+    $("confirmImportBtn").addEventListener("click", confirmImport);
+    $("importModal").addEventListener("change", (event) => {
+      if (event.target.matches('#importSwapToggle, input[name="importTarget"]')) renderImportDialog();
     });
 
     $("saveAiSettingsBtn").addEventListener("click", saveAiSettings);
@@ -8837,9 +9624,37 @@ ${orderNote}`;
       const button = event.target.closest("[data-dictionary-action]");
       if (!button) return;
       const dictionaryId = button.dataset.dictionaryId || "ecdict";
-      if (button.dataset.dictionaryAction === "install") installDictionary(dictionaryId);
+      if (button.dataset.dictionaryAction === "install") chooseDictionaryFile(dictionaryId);
       if (button.dataset.dictionaryAction === "test") testDictionary(dictionaryId);
       if (button.dataset.dictionaryAction === "remove") removeDictionary(dictionaryId);
+    });
+    $("dictionaryFileInput").addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      if (file) installDictionary(event.target.dataset.dictionaryId || "ecdict", file);
+    });
+    $("wordListImportBtn").addEventListener("click", () => $("wordListFileInput").click());
+    $("wordListFileInput").addEventListener("change", (event) => {
+      importWordListFile(event.target.files?.[0]);
+      event.target.value = "";
+    });
+    $("wordListSheetBtn").addEventListener("click", importWordListFromSheet);
+    $("wordListSheetUpdateBtn").addEventListener("click", updateWordListFromSheet);
+    $("wordListRenameBtn").addEventListener("click", renameWordList);
+    $("wordListExportBtn").addEventListener("click", exportWordList);
+    $("wordListDeleteBtn").addEventListener("click", deleteWordList);
+    $("sheetImportBtn").addEventListener("click", importFromSheet);
+    $("sheetUrlInput").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") importFromSheet();
+    });
+    $("librarySheetUpdateBtn").addEventListener("click", () => updateFromSheet(state.library.selectedId));
+    $("librarySheetOpenBtn").addEventListener("click", () => {
+      const library = state.libraries.find((item) => item.id === state.library.selectedId);
+      if (library?.sheet) window.open(sheetUrl(library.sheet), "_blank", "noopener");
+    });
+    ["importTextColumn", "importTranslationColumn", "importHeaderToggle"].forEach((id) => {
+      $(id).addEventListener("change", () => {
+        if (state.pendingImport) renderImportDialog();
+      });
     });
     $("clearTranslationCacheBtn").addEventListener("click", clearTranslationCache);
     $("openLibraryBtn").addEventListener("click", openLibraryModal);
@@ -8854,6 +9669,7 @@ ${orderNote}`;
     $("dictionarySpecialTabBtn").addEventListener("click", () => setDictionaryLibraryType("special"));
     $("dictionaryCategorySelect").addEventListener("change", () => {
       rememberDictionaryWordCategory();
+      renderWordListActions();
       state.dictionaryLibraryPage = 1;
       updateDictionaryStudyButton();
       renderDictionaryLibrary();
@@ -9143,7 +9959,7 @@ ${orderNote}`;
       goToEnteredLibraryPage();
       $("libraryPageInput").select();
     });
-    $("useLibraryBtn").addEventListener("click", useCommonLibrary);
+    $("useLibraryBtn").addEventListener("click", () => useCommonLibrary());
     $("librarySentenceList").addEventListener("click", (event) => {
       const loadButton = event.target.closest("[data-load-library-sentence]");
       if (loadButton) loadLibrarySentenceIntoPractice(loadButton.dataset.loadLibrarySentence);
@@ -9156,8 +9972,13 @@ ${orderNote}`;
         return;
       }
       if (value === "common") {
-        if (!state.library.items.length) await loadCommonLibrary();
-        useCommonLibrary();
+        await reloadMyLibraries();
+        if (!state.libraries.length) {
+          syncCurrentLibrarySelect(state.currentLibraryLabel);
+          openLibraryModal();
+        } else {
+          useCommonLibrary(state.activeLibraryId || state.libraries[0].id);
+        }
       } else if (value === "favorites") {
         useFavoritesLibrary();
       } else if (value === "audio") {
@@ -9776,5 +10597,6 @@ ${orderNote}`;
       }
       await tryLoadDefaultLibrary();
       render();
+      userData.onChange(() => scheduleCloudSync());
       initializeCloudAuth();
     })();

@@ -1,0 +1,102 @@
+# Test every push and pull request. Deploy to lang.mltz.tech only when a
+# GitHub Release is published (the release's tag is what goes live), or by
+# hand via "Run workflow" on main or a tag. Deployment runs deploy/deploy.sh
+# (allowlisted rsync of index.html + src/, content-hashed asset URLs).
+# Only release tags starting with "v" deploy; data releases (dictionaries-*) do not.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_SSH_KEY      private key whose public half is in vpsde's
+#                       authorized_keys as
+#                       restrict,command="/usr/bin/rrsync /home/carlos/langlsrw/public"
+#                       i.e. it can only rsync into the site directory.
+#   DEPLOY_KNOWN_HOSTS  vpsde's host key line (ssh-keyscan), pinned.
+#   DEPLOY_HOST         user@host of vpsde. Kept secret: the site sits behind
+#                       Cloudflare, so the origin address is not published.
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Unit tests
+        run: |
+          if compgen -G "tests/*.test.js" > /dev/null; then
+            node --test tests/*.test.js
+          else
+            echo "no unit tests yet"
+          fi
+      - name: Syntax check (all app scripts, vendor excluded)
+        run: |
+          find src -name '*.js' -not -path 'src/vendor/*' -print0 | while IFS= read -r -d '' file; do
+            node --check "$file"
+          done
+      - name: Grammar skill tests
+        run: node --test .agents/skills/*/scripts/*.test.js
+      - name: Generated prompt is up to date
+        run: node .agents/skills/langlsrw-traditional-grammar-analysis/scripts/build-web-prompt.js --check
+
+  deploy:
+    needs: test
+    if: >-
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')))
+    runs-on: ubuntu-latest
+    # One deployment at a time, whatever triggered it.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://lang.mltz.tech
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install deploy key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deploy
+        env:
+          # rrsync roots the key at the site directory, so "./" is its top.
+          LANGLSRW_DEPLOY_TARGET: ${{ secrets.DEPLOY_HOST }}:./
+        run: deploy/deploy.sh
+      - name: Verify the live site serves this build
+        run: |
+          # deploy.sh stamps each asset with the first 10 hex chars of its sha256.
+          app="src/app.js?v=$(sha256sum src/app.js | cut -c1-10)"
+          for attempt in 1 2 3 4 5; do
+            if curl -fsS "https://lang.mltz.tech/?check=${GITHUB_SHA}" | grep -qF "$app"; then
+              echo "live: $app"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::lang.mltz.tech does not reference $app yet"
+          exit 1
+      - name: Remove deploy key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

@@ -4,9 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>langLSRW</title>
+  <!-- Public OAuth client ID (Google sign-in + Drive) and browser API key for the Sheets Picker; both are restricted to this site's origins. -->
+  <meta name="google-client-id" content="180213407454-r5uujgmro3f0o8opcens160nkrn3s85q.apps.googleusercontent.com">
+  <meta name="google-api-key" content="AIzaSyBVHLOHo33UvlhmQPrVwcNmSlbOrUTFgeY">
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20260930-6">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-4">
 
 </head>
 <body data-theme="eye" data-active-page="listenPage">
@@ -24,6 +27,7 @@
               使用 Google 登录
             </button>
             <div id="cloudLoginStatus" class="cloud-login-status" aria-live="polite">尚未配置云登录</div>
+            <div class="small-note cloud-login-note">句库、收藏、背词进度和设置保存在你自己的 Google Drive「langLSRW」文件夹，服务器不保存任何数据。</div>
           </div>
         </section>
         <div class="login-choice-or" aria-hidden="true">or</div>
@@ -82,8 +86,8 @@
               <div class="account-menu-title">登录账户</div>
               <div id="cloudAccountStatus" class="cloud-account-status">未登录云账号</div>
               <button id="cloudLogoutBtn" type="button" disabled>退出 Google</button>
-              <div class="small-note">登录时读取一次云端数据；调试阶段不会自动保存。</div>
-              <button id="syncCloudBtn" type="button" disabled>手动同步</button>
+              <div class="small-note">数据保存在你自己的 Google Drive「langLSRW」文件夹，修改后自动同步。刷新页面后需要点一次「立即同步」重新连接。</div>
+              <button id="syncCloudBtn" type="button" disabled>立即同步</button>
             </section>
             <section id="localUserMenuSection" class="account-menu-section" hidden>
               <div class="account-menu-title">本机用户</div>
@@ -109,7 +113,7 @@
             <div class="sentence-tool-row">
               <span class="current-library-label">句库：</span>
               <select id="currentLibrarySelect" class="current-library-indicator" aria-label="切换句库">
-                <option value="common">常用句库</option>
+                <option value="common">我的句库</option>
                 <option value="favorites">用户收藏</option>
                 <option value="audio">音频字幕</option>
               </select>
@@ -268,8 +272,8 @@
       </div>
       <div class="library-layout">
         <aside class="library-sidebar" aria-label="句库分类">
-          <button id="librarySettingsTabBtn" class="library-type-button library-settings-button" type="button">自定义句库</button>
-          <button id="commonLibraryTabBtn" class="library-type-button is-active" type="button" aria-current="true">常用句库</button>
+          <button id="commonLibraryTabBtn" class="library-type-button is-active" type="button" aria-current="true">我的句库</button>
+          <button id="librarySettingsTabBtn" class="library-type-button library-settings-button" type="button">导入句库</button>
           <button id="audioLibraryTabBtn" class="library-type-button" type="button" aria-current="false" title="管理音频 + 字幕材料，每句播放原声">音频字幕</button>
           <button class="library-type-button" type="button" disabled>情景句库</button>
           <button class="library-type-button" type="button" disabled>语法句库</button>
@@ -279,12 +283,31 @@
         <section id="commonLibraryPanel" class="library-content">
           <div class="library-summary">
             <div class="library-title-line">
-              <h3 id="libraryName">常用英语句库</h3>
+              <select id="myLibrarySelect" class="my-library-select" aria-label="选择句库"></select>
               <div id="libraryMeta" class="small-note">准备加载...</div>
             </div>
-            <button id="useLibraryBtn" class="primary" type="button" disabled>使用此句库</button>
+            <div class="library-actions">
+              <button id="libraryImportBtn" type="button" title="导入 txt / lrc / tsv 句库">＋ 导入</button>
+              <input id="libraryFileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" hidden>
+              <button id="renameLibraryBtn" type="button" disabled>重命名</button>
+              <button id="exportLibraryBtn" type="button" disabled title="下载为「句子 | 翻译」格式的 txt，可以直接重新导入">导出 txt</button>
+              <button id="librarySheetUpdateBtn" type="button" hidden title="重新读取来源 Google 表格，新句子追加进来，翻译有变化的会合并">从表格更新</button>
+              <button id="librarySheetOpenBtn" type="button" hidden title="在新标签页打开来源 Google 表格">打开表格</button>
+              <button id="deleteLibraryBtn" type="button" disabled>删除</button>
+              <button id="useLibraryBtn" class="primary" type="button" disabled>使用此句库</button>
+            </div>
           </div>
-          <label class="library-search-label" for="librarySearchInput">搜索英文、中文或序号</label>
+          <div id="libraryEmpty" class="library-empty" hidden>
+            <h3>导入你的句库</h3>
+            <p>句库由你自己导入，保存在这台设备上（登录 Google 后会同步到你自己的 Google Drive）。推荐用 txt，每行一句，用「|」分隔两种语言：</p>
+            <pre class="import-example">Hello | 你好
+¿Qué es eso? | 那是什么？
+# 以 # 开头的行是注释</pre>
+            <p>也支持 .tsv（「句子 ⇥ 翻译」或「序号 ⇥ 句子 ⇥ 翻译」）、.lrc，以及 Anki / Tatoeba 导出的文件。同一个文件再导入一次可以选择追加，重复的句子会自动去重。</p>
+            <button id="libraryEmptyImportBtn" class="primary" type="button">＋ 导入句库</button>
+          </div>
+          <div id="libraryBrowse" class="library-browse" hidden>
+          <label class="library-search-label" for="librarySearchInput">搜索原句、翻译或序号</label>
           <input id="librarySearchInput" class="library-search" type="search" autocomplete="off" placeholder="输入关键词">
           <div id="librarySentenceList" class="library-sentence-list"></div>
           <div class="library-pagination">
@@ -298,21 +321,29 @@
             <button id="libraryLastPageBtn" type="button" disabled>最后页</button>
             <span id="libraryStatus" class="library-status" aria-live="polite">尚未加载</span>
           </div>
+          </div>
         </section>
         <section id="librarySettingsPanel" class="library-settings-panel" hidden>
           <div>
-            <h3>自定义句库</h3>
-            <div id="sourceStatus" class="source-status">当前句库：默认示例</div>
+            <h3>导入句库</h3>
+            <div id="sourceStatus" class="source-status">还没有句库</div>
           </div>
-          <label title="选择 .txt 或 .lrc 文件作为句库，只导入文字；音频 + 字幕请在“音频字幕”中导入">
-            导入 txt / lrc 句库
-            <input id="fileInput" type="file" accept=".txt,.lrc,text/plain" title="选择一个 .txt 或 .lrc 文件">
+          <label title="选择 .txt / .lrc / .tsv 文件，先预览再导入为句库；音频 + 字幕请在“音频字幕”中导入">
+            导入 txt / lrc / tsv 句库
+            <input id="fileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" title="选择一个 .txt、.lrc 或 .tsv 文件">
           </label>
+          <div id="sheetImportPanel" class="sheet-import">
+            <div class="sheet-import-title">从 Google 表格导入</div>
+            <input id="sheetUrlInput" type="text" placeholder="粘贴 Google 表格链接（可不填，直接选择）" aria-label="Google 表格链接">
+            <button id="sheetImportBtn" type="button">选择 Google 表格</button>
+            <div class="sheet-import-guest small-note">从 Google 表格导入：需要先用 Google 登录。</div>
+            <div class="small-note">每行一句，一列句子、一列翻译；导入后可以随时「从表格更新」。</div>
+          </div>
           <label>
-            粘贴句子（一行一句）
+            粘贴句子（一行一句，用「|」分隔翻译）
             <textarea id="sentenceInput" class="sentence-list" spellcheck="false"></textarea>
           </label>
-          <button id="useTextBtn" type="button">使用粘贴内容</button>
+          <button id="useTextBtn" type="button">用粘贴内容新建句库</button>
           <div class="free-translate-row">
             <button type="button" data-free-translate title="用浏览器内置的本机翻译（免费、不需要 API Key）把当前句库中还没有翻译的句子译成中文；需要电脑版 Chrome 或 Edge 138 以上，结果保存在本机，下次导入同样的句子会自动带上">免费翻译当前句库</button>
             <span class="small-note" data-free-translate-status></span>
@@ -335,6 +366,57 @@
             <input id="audioLibraryFileInput" type="file" accept=".lrc,audio/*,.m4a,.mp3,.wav,.ogg,.aac,.flac" multiple title="按住 Ctrl 同时选中音频和 .lrc 两个文件">
           </label>
         </section>
+      </div>
+    </div>
+  </div>
+  <div id="importModal" class="library-modal" hidden>
+    <div class="library-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+      <div class="library-header">
+        <div>
+          <h2 id="importModalTitle">导入句库</h2>
+          <div id="importSource" class="small-note"></div>
+        </div>
+        <button id="closeImportBtn" type="button">取消</button>
+      </div>
+      <div class="import-body">
+        <div id="importSummary" class="import-summary"></div>
+        <div id="importPreview" class="library-sentence-list import-preview"></div>
+        <fieldset id="importSheetOptions" class="import-options" hidden>
+          <legend>表格的列</legend>
+          <label class="radio-row"><span id="importTextColumnLabel">练习句子</span><select id="importTextColumn" aria-label="练习内容所在的列"></select></label>
+          <label class="radio-row"><span id="importTranslationColumnLabel">翻译</span><select id="importTranslationColumn" aria-label="翻译或释义所在的列"></select></label>
+          <label class="check-row">
+            <input id="importHeaderToggle" type="checkbox">
+            <span>第一行是表头（不导入）</span>
+          </label>
+        </fieldset>
+        <label id="importSwapRow" class="check-row">
+          <input id="importSwapToggle" type="checkbox">
+          <span id="importSwapLabel">对调两列：把「|」右边的内容作为练习句子</span>
+        </label>
+        <fieldset class="import-options">
+          <legend>导入到</legend>
+          <label class="radio-row">
+            <input type="radio" name="importTarget" value="new" checked>
+            <span id="importNewLabel">新建句库</span>
+            <input id="importNameInput" type="text" maxlength="80" aria-label="新句库名称">
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="importTarget" value="append">
+            <span id="importAppendLabel">追加到已有句库</span>
+            <select id="importAppendSelect" aria-label="追加到的句库"></select>
+          </label>
+        </fieldset>
+        <fieldset id="importDuplicateOptions" class="import-options">
+          <legend id="importDuplicateLegend">追加时遇到已有的句子（不区分大小写和空格）</legend>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="merge" checked><span>合并翻译（推荐）</span></label>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="keep"><span>保留原有翻译</span></label>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="replace"><span>用新翻译覆盖</span></label>
+        </fieldset>
+      </div>
+      <div id="importDriveNote" class="small-note import-drive-note"></div>
+      <div class="import-actions">
+        <button id="confirmImportBtn" class="primary" type="button">导入</button>
       </div>
     </div>
   </div>
@@ -488,7 +570,9 @@
             </div>
             <div class="settings-section" data-settings-panel="dictionary" data-settings-intro="本机安装的词典，用于查词、词库和背单词。" hidden>
               <div class="settings-section-title">本地词典</div>
+              <p class="small-note">词典不放在服务器上：先下载词典文件（约 70 MB，<a id="dictionaryReleaseLink" href="https://github.com/carloscn/BookHill/releases/tag/dictionaries-2026.10" target="_blank" rel="noopener">全部下载</a>），再点「从文件安装」选择它。安装后保存在本浏览器里，可离线查词。</p>
               <div id="dictionarySettingsList" class="dictionary-settings-list" aria-live="polite"></div>
+              <input id="dictionaryFileInput" type="file" accept=".gz,.sqlite,application/gzip" hidden>
             </div>
             <div class="settings-section" data-settings-panel="translation" data-settings-intro="免费翻译的结果会缓存在浏览器里，避免重复请求。" hidden>
               <div class="settings-section-title">翻译缓存</div>
@@ -577,6 +661,18 @@
               <button class="word-review-start" type="button" data-dictionary-study-session="review">复习 (0)</button>
               <button class="word-review-start" type="button" data-dictionary-study-session="test">测验 (0)</button>
             </div>
+          </div>
+          <div class="word-list-actions" aria-label="我的词表">
+            <span class="word-list-actions-label">我的词表：</span>
+            <button id="wordListImportBtn" type="button" title="从 txt / tsv 导入词表：每行一个词，可以用「|」或 Tab 带上释义">＋ 导入文件</button>
+            <input id="wordListFileInput" type="file" accept=".txt,.tsv,text/plain,text/tab-separated-values" hidden>
+            <button id="wordListSheetBtn" type="button" title="从 Google 表格导入词表（需要 Google 登录）">从 Google 表格导入</button>
+            <span id="wordListManage" class="word-list-manage" hidden>
+              <button id="wordListSheetUpdateBtn" type="button" hidden title="重新读取来源表格，新词追加进来，释义有变化的会合并">从表格更新</button>
+              <button id="wordListRenameBtn" type="button">重命名</button>
+              <button id="wordListExportBtn" type="button" title="下载为「单词 | 释义」格式的 txt，可以直接重新导入">导出</button>
+              <button id="wordListDeleteBtn" type="button">删除</button>
+            </span>
           </div>
           <div id="dictionaryLibraryCount" class="user-words-count">
             <input id="dictionaryLibrarySearchInput" type="search" autocomplete="off" placeholder="搜索单词" aria-label="搜索完整词库">
@@ -784,17 +880,17 @@
   </div>
   <div id="dictionaryLookupPopover" class="dictionary-lookup-popover" role="dialog" aria-label="单词查询" hidden></div>
   <div id="englishLookupPopover" class="dictionary-lookup-popover english-lookup-popover" role="dialog" aria-label="英语词典查询" hidden></div>
-  <script src="src/cloud-config.js?v=20260925-1"></script>
-  <script src="src/vendor/supabase/supabase-2.117.1.js"></script>
-  <script src="src/auth/supabase-auth-service.js?v=20260925-1"></script>
+  <script src="src/cloud-sync.js?v=20261002-1"></script>
+  <script src="src/google-drive.js?v=20261002-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
-  <script src="src/library.js?v=20260923-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20260928-1"></script>
+  <script src="src/library-import.js?v=20261002-1"></script>
+  <script src="src/library-store.js?v=20261002-1"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261002-3"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20260928-5"></script>
-  <script src="src/app.js?v=20260930-17"></script>
+  <script src="src/user-data.js?v=20261002-1"></script>
+  <script src="src/app.js?v=20261002-6"></script>
 </body>
 </html>

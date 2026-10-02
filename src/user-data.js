@@ -26,7 +26,9 @@
     practiceEvent: { scope: "language", kind: "event", enabled: false },
     reviewEvent: { scope: "language", kind: "event", enabled: false },
     grammarResult: { scope: "language", kind: "state" },
-    customLibrary: { scope: "language", kind: "state" }
+    customLibrary: { scope: "language", kind: "state" },
+    // 我的词表: user word lists shown as 词库 categories ({ id, name, source, sheet, words: [[word, note?], ...] }).
+    wordList: { scope: "language", kind: "state" }
   };
 
   let db = null;

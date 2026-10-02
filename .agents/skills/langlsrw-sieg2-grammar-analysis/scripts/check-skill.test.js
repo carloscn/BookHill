@@ -118,6 +118,7 @@ if (fs.existsSync(appPath)) {
       let rendered = 0;
       const context = vm.createContext({
         state: { grammarLoading: false, grammarVisible: false },
+        currentLearningLanguage: () => ({ grammarAnalysisEnabled: true }),
         currentSentence: () => cases[0].sentence,
         currentGrammar: () => grammar,
         renderTarget: () => { rendered += 1; },

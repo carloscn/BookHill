@@ -67,6 +67,15 @@ const LIST_PROFILES = {
   }
 };
 
+// A user word list (我的词表) restricts a word list to the given words, matched case-insensitively through the
+// word COLLATE NOCASE index. Returns null when the request is not for a word list.
+function wordListFilter(options) {
+  const words = Array.isArray(options?.wordList) ? options.wordList : null;
+  if (!words) return null;
+  const unique = [...new Set(words.map((word) => String(word || "").trim()).filter(Boolean))];
+  return { where: "stardict.word COLLATE NOCASE IN (SELECT value FROM json_each(?))", bind: JSON.stringify(unique) };
+}
+
 function listProfile(dictionary) {
   return LIST_PROFILES[dictionary.languageId] || LIST_PROFILES.en;
 }
@@ -154,18 +163,37 @@ function reply(id, result, error) {
   self.postMessage({ id, result, error: error ? String(error.message || error) : undefined });
 }
 
+let initializing = null;
+
+// The OPFS pool takes exclusive file handles. Right after a reload the previous page's Worker may still hold them,
+// so opening the pool is retried a few times, and a failure is not cached: the next call tries again.
 async function initialize() {
-  if (sqlite3) return;
-  sqlite3 = await sqlite3InitModule({
-    locateFile: (file) => new URL(`../vendor/sqlite-wasm/${file}`, import.meta.url).href
+  if (pool) return;
+  initializing ||= (async () => {
+    sqlite3 ||= await sqlite3InitModule({
+      locateFile: (file) => new URL(`../vendor/sqlite-wasm/${file}`, import.meta.url).href
+    });
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const opened = await sqlite3.installOpfsSAHPoolVfs({
+          name: "langlsrw-dictionary",
+          directory: ".langlsrw-dictionary",
+          initialCapacity: 4,
+          forceReinitIfPreviouslyFailed: true
+        });
+        // Room for both dictionaries plus the journal of the frequency import.
+        await opened.reserveMinimumCapacity(6);
+        pool = opened;
+        return;
+      } catch (error) {
+        if (attempt >= 5) throw new Error(`本地词典存储暂时被占用（可能在另一个标签页打开着），请稍后再试：${error.message || error}`);
+        await new Promise((resolve) => setTimeout(resolve, 400 * attempt));
+      }
+    }
+  })().finally(() => {
+    initializing = null;
   });
-  pool = await sqlite3.installOpfsSAHPoolVfs({
-    name: "langlsrw-dictionary",
-    directory: ".langlsrw-dictionary",
-    initialCapacity: 4
-  });
-  // Room for both dictionaries plus the journal of the frequency import.
-  await pool.reserveMinimumCapacity(6);
+  await initializing;
 }
 
 function closeDatabase() {
@@ -211,10 +239,7 @@ async function install(payload) {
   const dictionary = normalizeDictionary(payload);
   closeDatabase();
   forgetFrequency(dictionary);
-  const response = await fetch(payload.databaseUrl, { cache: "no-store" });
-  if (!response.ok || !response.body) {
-    throw new Error(`词典下载失败（${response.status}）`);
-  }
+  if (!(payload.file instanceof Blob)) throw new Error("没有收到词典文件");
 
   let received = 0;
   if (payload.compression === "gzip" && typeof DecompressionStream === "undefined") {
@@ -227,16 +252,21 @@ async function install(payload) {
       controller.enqueue(chunk);
     }
   });
-  const downloadedBody = response.body.pipeThrough(progressStream);
+  const downloadedBody = payload.file.stream().pipeThrough(progressStream);
   const databaseBody = payload.compression === "gzip"
     ? downloadedBody.pipeThrough(new DecompressionStream("gzip"))
     : downloadedBody;
   const reader = databaseBody.getReader();
-  await pool.importDb(dictionary.databaseName, async () => {
-    const { done, value } = await reader.read();
-    if (done) return undefined;
-    return value;
-  });
+  try {
+    await pool.importDb(dictionary.databaseName, async () => {
+      const { done, value } = await reader.read();
+      if (done) return undefined;
+      return value;
+    });
+  } catch (error) {
+    pool.unlink(dictionary.databaseName);
+    throw new Error(`词典文件无法读取，请确认选择的是 ${dictionary.id} 的 .sqlite.gz 文件（${error.message || error}）`);
+  }
 
   openDatabase(dictionary);
   const dbMeta = metadata();
@@ -338,7 +368,8 @@ async function list(payload = {}) {
   await ensureFrequency(payload, dictionary);
   const profile = listProfile(dictionary);
   const { entryType = "words", category = "all", sort = "alphabetical", query = "", page = 1, pageSize = 100, excludeWords = [] } = payload.options || payload;
-  const categoryWhere = profile.categories[category] || profile.categories.all;
+  const wordList = wordListFilter(payload.options || payload);
+  const categoryWhere = wordList ? wordList.where : (profile.categories[category] || profile.categories.all);
   const letter = profile.firstLetter;
   const typeWhere = entryType === "suffixes"
     ? "stardict.word LIKE '-%'"
@@ -356,8 +387,8 @@ async function list(payload = {}) {
   const excludeWhere = normalizedExcludeWords.length
     ? `lower(stardict.word) NOT IN (${normalizedExcludeWords.map(() => "?").join(",")})`
     : "1=1";
-  const bindings = [...(normalizedQuery ? [`%${escapedQuery}%`] : []), ...normalizedExcludeWords];
-  const source = listSource(dictionary, profile, profile.categories[category] ? category : "all", sort);
+  const bindings = [...(wordList ? [wordList.bind] : []), ...(normalizedQuery ? [`%${escapedQuery}%`] : []), ...normalizedExcludeWords];
+  const source = listSource(dictionary, profile, !wordList && profile.categories[category] ? category : "all", sort);
   const where = `(${typeWhere}) AND (${categoryWhere}) AND (${searchWhere}) AND (${excludeWhere})`;
   const normalizedPageSize = Math.max(20, Math.min(Number(pageSize) || 100, 200));
   const countSql = `SELECT count(*) FROM ${source} WHERE ${where}`;
@@ -376,7 +407,8 @@ async function studyList(payload = {}) {
   await ensureFrequency(payload, dictionary);
   const profile = listProfile(dictionary);
   const { category = "all", sort = "alphabetical", excludeWords = [] } = payload.options || payload;
-  const categoryWhere = profile.categories[category];
+  const wordList = wordListFilter(payload.options || payload);
+  const categoryWhere = wordList ? wordList.where : profile.categories[category];
   if (!categoryWhere) throw new Error("请选择具体词表");
   const normalizedExcludeWords = [...new Set((Array.isArray(excludeWords) ? excludeWords : [])
     .map((word) => String(word || "").trim().toLowerCase())
@@ -384,10 +416,10 @@ async function studyList(payload = {}) {
   const excludeWhere = normalizedExcludeWords.length
     ? `AND lower(stardict.word) NOT IN (${normalizedExcludeWords.map(() => "?").join(",")})`
     : "";
-  const source = listSource(dictionary, profile, category, sort);
+  const source = listSource(dictionary, profile, wordList ? "all" : category, sort);
   return database.selectArrays(
     `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE stardict.word GLOB '${profile.firstLetter}*' AND instr(trim(stardict.word), ' ') = 0 AND (${categoryWhere}) ${excludeWhere} ORDER BY ${profile.orderBy[sort] || profile.orderBy.alphabetical}`,
-    normalizedExcludeWords
+    [...(wordList ? [wordList.bind] : []), ...normalizedExcludeWords]
   ).map(([id, word, collins]) => ({ id, word, collins: Number(collins) || 0 }));
 }
 
