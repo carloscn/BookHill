@@ -128,8 +128,6 @@ const fallbackSentences = [
         // Word review wording: the word's language and the language of its dictionary meanings.
         wordLabel: "英文",
         meaningLabel: "中文",
-        commonLibraryManifestUrl: "assets/libraries/common-english-30150/manifest.json",
-        commonLibraryContent: "英文原句 + 中文翻译",
         accents: [["en-GB", "英音"], ["en-US", "美音"]],
         sentenceFavoritesEnabled: true,
         grammarAnalysisEnabled: true
@@ -148,8 +146,6 @@ const fallbackSentences = [
         reviewDistractorCategory: "top3000",
         wordLabel: "西语",
         meaningLabel: "英文",
-        commonLibraryManifestUrl: "assets/libraries/common-spanish-134910/manifest.json",
-        commonLibraryContent: "西语原句 + 英文翻译",
         // Accent regions for TTS voices and speech recognition; materials and records are not region-specific yet.
         accents: [["es-ES", "西班牙"], ["es-MX", "墨西哥"], ["es-US", "美国"], ["es-AR", "阿根廷"], ["es-CO", "哥伦比亚"], ["es-CL", "智利"]],
         sentenceFavoritesEnabled: true,
@@ -160,6 +156,9 @@ const fallbackSentences = [
 
     const state = {
       sentences: normalizeSentenceList(fallbackSentences),
+      libraries: [], // the current identity's own libraries for the current learning language
+      activeLibraryId: "",
+      pendingImport: null,
       index: 0,
       events: [],
       startedAt: 0,
@@ -362,7 +361,7 @@ const fallbackSentences = [
 
     function syncCurrentLibrarySelect(label) {
       const select = $("currentLibrarySelect");
-      const isCommon = label === "常用句库";
+      const isCommon = label === "我的句库";
       const isFavorites = label === "用户收藏";
       const isAudio = label === "音频字幕";
       let customOption = select.querySelector('option[value="custom"]');
@@ -456,9 +455,14 @@ const fallbackSentences = [
     }
 
     function saveLastPosition() {
+      const previous = loadLastPosition();
+      const positions = { ...(previous?.positions || {}) };
+      if (state.currentLibraryLabel === "我的句库" && state.activeLibraryId) positions[state.activeLibraryId] = state.index;
       userData.put("position", "last", {
         libraryLabel: state.currentLibraryLabel,
-        index: state.index
+        libraryId: state.currentLibraryLabel === "我的句库" ? state.activeLibraryId : "",
+        index: state.index,
+        positions
       }, languageScope());
     }
 
@@ -502,12 +506,10 @@ const fallbackSentences = [
       return librarySentenceMap.map.get(String(id)) || null;
     }
 
-    function librarySentenceRef(item) {
-      const normalized = normalizeSentenceItem(item);
-      const libraryId = state.library.manifest?.id;
-      if (normalized.id && libraryId && normalized.libraryId === libraryId && state.library.fingerprint && librarySentenceById(normalized.id)) {
-        return { lib: libraryId, id: normalized.id, lf: state.library.fingerprint };
-      }
+    // Libraries are the user's own (imported, appendable, synced), so a library id + sentence id +
+    // fingerprint reference would go stale on the next append. Sentences are always stored as text;
+    // references written by the old built-in libraries simply no longer resolve.
+    function librarySentenceRef() {
       return null;
     }
 
@@ -994,12 +996,30 @@ const fallbackSentences = [
       });
     }
 
-    function commonLibraryManifestUrl() {
-      return currentLearningLanguage().commonLibraryManifestUrl;
+    // ---- My libraries ---------------------------------------------------------
+    // Each identity's libraries live in IndexedDB (src/library-store.js), one per import, tagged with
+    // a learning language; imports go through the preview dialog (src/library-import.js). Nothing is
+    // fetched from the server.
+    const libraryStore = window.langLSRWLibraryStore;
+    const importer = window.langLSRWLibraryImport;
+
+    function libraryOwner() {
+      return userDataIdentity();
+    }
+
+    async function reloadMyLibraries() {
+      let all = [];
+      try {
+        all = await libraryStore.list(libraryOwner());
+      } catch (error) {
+        $("libraryStatus").textContent = `读取本机句库失败：${error.message || error}`;
+      }
+      state.libraries = all.filter((library) => (library.language || "en") === state.learningLanguageId);
+      return state.libraries;
     }
 
     function resetCommonLibraryState() {
-      state.library.manifest = null;
+      state.library.selectedId = "";
       state.library.items = [];
       state.library.fingerprint = "";
       state.library.filteredItems = [];
@@ -1105,31 +1125,43 @@ const fallbackSentences = [
       renderLibraryPage();
     }
 
+    function libraryMetaText(library) {
+      const translated = library.items.filter((item) => item.translation).length;
+      return `${library.items.length.toLocaleString()} 句 · ${translated.toLocaleString()} 句有翻译${library.source ? ` · 来源 ${library.source}` : ""}`;
+    }
+
+    function selectLibraryInModal(id) {
+      const library = state.libraries.find((item) => item.id === id) || null;
+      state.library.selectedId = library ? library.id : "";
+      state.library.items = library ? normalizeSentenceList(library.items) : [];
+      state.library.query = "";
+      state.library.page = 0;
+      $("librarySearchInput").value = "";
+      state.library.filteredItems = state.library.items;
+      renderMyLibraries();
+    }
+
+    function renderMyLibraries() {
+      const selected = state.libraries.find((item) => item.id === state.library.selectedId) || null;
+      $("myLibrarySelect").innerHTML = state.libraries.map((library) => (
+        `<option value="${escapeHtml(library.id)}">${escapeHtml(library.name)}${library.id === state.activeLibraryId ? "（练习中）" : ""}</option>`
+      )).join("");
+      $("myLibrarySelect").value = state.library.selectedId;
+      $("myLibrarySelect").hidden = !selected;
+      $("libraryEmpty").hidden = Boolean(selected);
+      $("libraryBrowse").hidden = !selected;
+      ["useLibraryBtn", "renameLibraryBtn", "exportLibraryBtn", "deleteLibraryBtn"].forEach((buttonId) => {
+        $(buttonId).disabled = !selected;
+      });
+      $("libraryMeta").textContent = selected ? libraryMetaText(selected) : `还没有${currentLearningLanguage().label}句库`;
+      $("useLibraryBtn").textContent = selected && selected.id === state.activeLibraryId ? "继续练习" : "使用此句库";
+      if (selected) renderLibraryPage();
+    }
+
     async function loadCommonLibrary() {
-      // Loading is tracked per learning language, so switching language during a load still loads the new library.
-      if (state.library.items.length || (state.library.loading && state.library.loadingLanguage === state.learningLanguageId)) return;
-      state.library.loading = true;
-      state.library.loadingLanguage = state.learningLanguageId;
-      $("libraryStatus").textContent = "正在加载常用句库...";
-      $("librarySentenceList").innerHTML = '<div class="empty">正在读取常用句库...</div>';
-      const languageId = state.learningLanguageId;
-      try {
-        const result = await window.langLSRWLibrary.load(commonLibraryManifestUrl());
-        if (state.learningLanguageId !== languageId) return;
-        state.library.manifest = result.manifest;
-        state.library.items = result.items;
-        state.library.fingerprint = textFingerprint(result.items.map((item) => `${item.id}\t${item.text}`).join("\n"));
-        state.library.filteredItems = result.items;
-        $("libraryName").textContent = result.manifest.name;
-        $("libraryMeta").textContent = `${result.items.length.toLocaleString()} 条 · ${currentLearningLanguage().commonLibraryContent} · v${result.manifest.version}`;
-        $("useLibraryBtn").disabled = false;
-        renderLibraryPage();
-      } catch (error) {
-        $("libraryStatus").textContent = `加载失败：${error.message || error}`;
-        $("librarySentenceList").innerHTML = '<div class="empty">请确认通过本地服务器打开网页，且句库文件完整。</div>';
-      } finally {
-        if (state.library.loadingLanguage === languageId) state.library.loading = false;
-      }
+      await reloadMyLibraries();
+      const keep = state.libraries.some((item) => item.id === state.library.selectedId);
+      selectLibraryInModal(keep ? state.library.selectedId : (state.activeLibraryId || state.libraries[0]?.id || ""));
     }
 
     async function openLibraryModal() {
@@ -1142,24 +1174,180 @@ const fallbackSentences = [
       $("librarySearchInput").focus();
     }
 
-    function useCommonLibrary() {
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      state.index = 0;
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+    function practiceLibrary(library, index) {
+      state.activeLibraryId = library.id;
+      state.sentences = normalizeSentenceList(library.items);
+      state.index = Number.isInteger(index) && index >= 0 && index < state.sentences.length ? index : 0;
+      setCurrentLibrary("我的句库", `当前句库：${library.name}（${state.sentences.length.toLocaleString()}句）`);
+      saveLastPosition();
+    }
+
+    function useCommonLibrary(id = state.library.selectedId) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      practiceLibrary(library, loadLastPosition()?.positions?.[library.id]);
       closeLibraryModal();
       resetCurrent(true);
     }
 
     function loadLibrarySentenceIntoPractice(id) {
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      const matchIndex = state.sentences.findIndex((item) => item.id === id);
-      state.index = Math.max(0, matchIndex);
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+      const library = state.libraries.find((item) => item.id === state.library.selectedId);
+      if (!library) return;
+      practiceLibrary(library, library.items.findIndex((item) => String(item.id) === String(id)));
       closeLibraryModal();
       setActivePage("listenPage");
       resetCurrent(true);
+    }
+
+    async function renameLibrary(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      const name = prompt("句库名称", library.name)?.trim();
+      if (!name || name === library.name) return;
+      await libraryStore.put(libraryOwner(), { ...library, name: name.slice(0, 80), updatedAt: new Date().toISOString() });
+      await loadCommonLibrary();
+      if (state.activeLibraryId === id) syncCurrentLibrarySelect(state.currentLibraryLabel);
+    }
+
+    async function deleteLibrary(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      if (!(await showAppConfirm(`确定删除句库「${library.name}」吗？这台设备上的这个句库会被删除。`, { title: "删除句库", okText: "删除" }))) return;
+      await libraryStore.remove(libraryOwner(), id);
+      await loadCommonLibrary();
+      if (state.activeLibraryId === id) {
+        state.activeLibraryId = "";
+        await tryLoadDefaultLibrary();
+      }
+    }
+
+    function exportLibraryText(id) {
+      const library = state.libraries.find((item) => item.id === id);
+      if (!library) return;
+      const blob = new Blob([importer.toPipeText(library.items)], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${library.name}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    // ---- Import dialog (preview, new vs. append, duplicates) -------------------
+    const formatLabels = { pipe: "竖线「|」分隔", tsv: "Tab 分隔", lrc: "LRC 歌词", lines: "逐行", sheet: "表格" };
+
+    function importItems() {
+      const parsed = state.pendingImport.parsed;
+      if (!$("importSwapToggle").checked) return parsed.items;
+      return importer.mergeItems([], importer.swapColumns(parsed.items)).items;
+    }
+
+    function renderImportDialog() {
+      const { parsed, source } = state.pendingImport;
+      const items = importItems();
+      const parts = [
+        `格式：${formatLabels[parsed.format] || parsed.format}`,
+        `识别到 ${items.length.toLocaleString()} 句（${items.filter((item) => item.translation).length.toLocaleString()} 句有翻译）`
+      ];
+      if (parsed.duplicatesInFile) parts.push(`文件内重复 ${parsed.duplicatesInFile.toLocaleString()} 句已合并`);
+      if (parsed.skipped) parts.push(`跳过 ${parsed.skipped} 行`);
+      $("importSource").textContent = `${source} · 导入为${currentLearningLanguage().label}句库`;
+      $("importSummary").textContent = parts.join(" · ");
+      $("importPreview").innerHTML = items.slice(0, 8).map((item) => `
+        <div class="library-sentence-row import-row">
+          <span class="library-sentence-english">${escapeHtml(item.text)}</span>
+          <span class="library-sentence-translation">${escapeHtml(item.translation) || "<em>（无翻译）</em>"}</span>
+        </div>`).join("") + (items.length > 8 ? `<div class="small-note import-more">… 另外 ${(items.length - 8).toLocaleString()} 句</div>` : "");
+      const target = document.querySelector('input[name="importTarget"]:checked').value;
+      $("importNameInput").disabled = target !== "new";
+      $("importAppendSelect").disabled = target !== "append";
+      $("importDuplicateOptions").disabled = target !== "append";
+      $("confirmImportBtn").disabled = !items.length;
+    }
+
+    async function openImportDialog({ text = "", filename = "", name, source }) {
+      const parsed = importer.parseImport(text, filename);
+      if (!parsed.items.length) {
+        alert("没有识别到可练习的句子。推荐格式：每行一句，用「|」分隔两种语言，例如：Hello | 你好");
+        return false;
+      }
+      fillTranslationsFromCache(parsed.items);
+      await reloadMyLibraries();
+      state.pendingImport = { parsed, source };
+      closeLibraryModal();
+      closeTopMenus();
+      // Re-importing a file with the same name most likely means "add to it".
+      const sameName = state.libraries.find((library) => library.name === name);
+      $("importAppendSelect").innerHTML = state.libraries.map((library) => (
+        `<option value="${escapeHtml(library.id)}">${escapeHtml(library.name)}（${library.items.length.toLocaleString()} 句）</option>`
+      )).join("");
+      $("importAppendSelect").value = sameName?.id || state.activeLibraryId || state.libraries[0]?.id || "";
+      document.querySelector('input[name="importTarget"][value="append"]').disabled = !state.libraries.length;
+      document.querySelector(`input[name="importTarget"][value="${sameName ? "append" : "new"}"]`).checked = true;
+      document.querySelector('input[name="importDuplicates"][value="merge"]').checked = true;
+      $("importNameInput").value = name;
+      $("importSwapToggle").checked = false;
+      renderImportDialog();
+      $("importModal").hidden = false;
+      $("confirmImportBtn").focus();
+      return true;
+    }
+
+    function closeImportDialog() {
+      $("importModal").hidden = true;
+      state.pendingImport = null;
+    }
+
+    async function createLibrary({ name, source, items }) {
+      const now = new Date().toISOString();
+      return libraryStore.put(libraryOwner(), {
+        id: libraryStore.newId(),
+        name: String(name || "未命名句库").trim().slice(0, 80) || "未命名句库",
+        source: source || "",
+        language: state.learningLanguageId,
+        createdAt: now,
+        updatedAt: now,
+        items: items.map((item, index) => ({ id: String(item.id || index + 1), text: item.text, translation: item.translation || "" }))
+      });
+    }
+
+    async function confirmImport() {
+      if (!state.pendingImport) return;
+      const items = importItems();
+      const { source } = state.pendingImport;
+      const target = document.querySelector('input[name="importTarget"]:checked').value;
+      const duplicates = document.querySelector('input[name="importDuplicates"]:checked').value;
+      $("confirmImportBtn").disabled = true;
+      try {
+        let library;
+        let message;
+        if (target === "append") {
+          const current = state.libraries.find((item) => item.id === $("importAppendSelect").value);
+          if (!current) return;
+          const merged = importer.mergeItems(current.items, items, { duplicates });
+          library = await libraryStore.put(libraryOwner(), {
+            ...current,
+            items: merged.items,
+            source: [...new Set([current.source, source].filter(Boolean))].join("、").slice(0, 200),
+            updatedAt: new Date().toISOString()
+          });
+          message = `已追加到「${library.name}」：新增 ${merged.added.toLocaleString()} 句，重复 ${merged.duplicates.toLocaleString()} 句${merged.translationsUpdated ? `（${merged.translationsUpdated.toLocaleString()} 句更新了翻译）` : ""}，现在共 ${merged.items.length.toLocaleString()} 句。`;
+        } else {
+          library = await createLibrary({ name: $("importNameInput").value, source, items });
+          message = `已新建句库「${library.name}」：${library.items.length.toLocaleString()} 句。`;
+        }
+        closeImportDialog();
+        await reloadMyLibraries();
+        const keepPosition = target === "append" && state.activeLibraryId === library.id;
+        practiceLibrary(library, keepPosition ? state.index : 0);
+        resetCurrent(!keepPosition);
+        alert(message);
+      } catch (error) {
+        $("confirmImportBtn").disabled = false;
+        alert(`导入失败：${error.message || error}`);
+      }
     }
 
     // ---- Original-audio materials: an audio file plus a timed .lrc. Each sentence keeps its [start, end) seconds
@@ -1477,9 +1665,9 @@ const fallbackSentences = [
 
     // 音频字幕 panel: bundled audio + subtitle materials in assets/audio/. The audio is fetched whole into a Blob
     // because the local Python server does not answer HTTP Range requests, which seeking to each sentence needs.
-    const AUDIO_LIBRARY_MATERIALS = [
-      { id: "audio-example", languageId: "en", title: "Audio_Example", audio: "assets/audio/Audio_Example.m4a", subtitles: "assets/audio/Audio_Example.lrc" }
-    ];
+    // No audio is bundled or served: materials are imported by the user (audio + .lrc). The example that
+    // used to ship here lives in the repository's data/audio/ for anyone who wants to import it.
+    const AUDIO_LIBRARY_MATERIALS = [];
 
     function currentAudioLibraryMaterials() {
       const languageId = state.learningLanguageId || "en";
@@ -1955,28 +2143,21 @@ const fallbackSentences = [
 
     async function importSentenceFile(file) {
       if (!file) return false;
-      if (!/\.(txt|lrc)$/i.test(file.name) && !/^text\//i.test(file.type || "")) {
-        alert("请导入 .txt 或 .lrc 文件。");
+      if (!/\.(txt|lrc|tsv)$/i.test(file.name) && !/^text\//i.test(file.type || "")) {
+        alert("请导入 .txt、.lrc 或 .tsv 文件。");
         return false;
       }
-      const text = await file.text();
-      const sentences = parseSentences(text, file.name);
-      if (!sentences.length) {
-        alert("没有识别到可练习的句子。");
-        return false;
-      }
-      fillTranslationsFromCache(sentences);
-      state.sentences = sentences;
-      state.index = 0;
-      setCurrentLibrary("自定义句库", sentenceSourceLabel(file.name, sentences));
-      resetCurrent(true);
-      closeTopMenus();
-      return true;
+      return openImportDialog({
+        text: await file.text(),
+        filename: file.name,
+        name: file.name.replace(/\.(txt|lrc|tsv)$/i, ""),
+        source: file.name
+      });
     }
 
     async function tryLoadDefaultLibrary() {
       const lastPosition = loadLastPosition();
-      await loadCommonLibrary();
+      await reloadMyLibraries();
       if (lastPosition && lastPosition.libraryLabel === "用户收藏" && currentLearningLanguage().sentenceFavoritesEnabled) {
         const favorites = loadUserSentences();
         if (favorites.length) {
@@ -1994,13 +2175,18 @@ const fallbackSentences = [
           return;
         }
       }
-      if (!state.library.items.length || !state.library.manifest) return;
-      state.sentences = normalizeSentenceList(state.library.items);
-      state.index = (lastPosition && lastPosition.libraryLabel === "常用句库"
-        && Number.isInteger(lastPosition.index) && lastPosition.index >= 0 && lastPosition.index < state.sentences.length)
-        ? lastPosition.index
-        : 0;
-      setCurrentLibrary("常用句库", `当前句库：${state.library.manifest.name}（${state.sentences.length.toLocaleString()}句）`);
+      const library = state.libraries.find((item) => item.id === lastPosition?.libraryId) || state.libraries[0];
+      if (!library) {
+        // No library yet: a few built-in demo sentences (code, not server data) until the user imports.
+        state.activeLibraryId = "";
+        state.sentences = normalizeSentenceList(fallbackSentences);
+        state.index = 0;
+        setCurrentLibrary("示例句子", "还没有句库：现在是几句内置示例。打开「句库」导入你自己的句子。");
+        render();
+        return;
+      }
+      const index = lastPosition?.positions?.[library.id] ?? (lastPosition?.libraryId === library.id ? lastPosition.index : 0);
+      practiceLibrary(library, index);
       render();
     }
 
@@ -3373,6 +3559,7 @@ ${orderNote}`;
         document.querySelector(".font-menu[open], .user-menu[open]")
         || !$("settingsModal").hidden
         || !$("libraryModal").hidden
+        || !$("importModal").hidden
         || !$("dictionaryLibraryModal").hidden
         || !$("userPhrasesModal").hidden
         || document.querySelector(".word-review-modal:not([hidden])")
@@ -3416,6 +3603,11 @@ ${orderNote}`;
       if (event.key === "Escape" && !$("settingsModal").hidden) {
         event.preventDefault();
         closeSettings();
+        return;
+      }
+      if (event.key === "Escape" && !$("importModal").hidden) {
+        event.preventDefault();
+        closeImportDialog();
         return;
       }
       // 单词练习: the 按住说话 shortcut holds the same recognition as the button (keydown starts, keyup stops).
@@ -8804,14 +8996,31 @@ ${orderNote}`;
       event.target.value = "";
     });
 
-    $("useTextBtn").addEventListener("click", () => {
-      const sentences = parseSentences($("sentenceInput").value);
-      if (!sentences.length) return;
-      fillTranslationsFromCache(sentences);
-      state.sentences = sentences;
-      state.index = 0;
-      setCurrentLibrary("自定义句库", sentenceSourceLabel("粘贴内容", sentences));
-      resetCurrent(true);
+    $("useTextBtn").addEventListener("click", async () => {
+      if (!$("sentenceInput").value.trim()) return;
+      const stamp = new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+      if (await openImportDialog({ text: $("sentenceInput").value, name: `粘贴内容 ${stamp}`, source: "粘贴" })) {
+        $("sentenceInput").value = "";
+      }
+    });
+    $("myLibrarySelect").addEventListener("change", (event) => selectLibraryInModal(event.target.value));
+    $("libraryImportBtn").addEventListener("click", () => $("libraryFileInput").click());
+    $("libraryFileInput").addEventListener("change", async (event) => {
+      const [file] = event.target.files;
+      event.target.value = "";
+      await importSentenceFile(file);
+    });
+    $("libraryEmptyImportBtn").addEventListener("click", () => $("libraryFileInput").click());
+    $("renameLibraryBtn").addEventListener("click", () => renameLibrary(state.library.selectedId));
+    $("deleteLibraryBtn").addEventListener("click", () => deleteLibrary(state.library.selectedId));
+    $("exportLibraryBtn").addEventListener("click", () => exportLibraryText(state.library.selectedId));
+    $("closeImportBtn").addEventListener("click", closeImportDialog);
+    $("importModal").addEventListener("pointerdown", (event) => {
+      if (event.target === $("importModal")) closeImportDialog();
+    });
+    $("confirmImportBtn").addEventListener("click", confirmImport);
+    $("importModal").addEventListener("change", (event) => {
+      if (event.target.matches('#importSwapToggle, input[name="importTarget"]')) renderImportDialog();
     });
 
     $("saveAiSettingsBtn").addEventListener("click", saveAiSettings);
@@ -9143,7 +9352,7 @@ ${orderNote}`;
       goToEnteredLibraryPage();
       $("libraryPageInput").select();
     });
-    $("useLibraryBtn").addEventListener("click", useCommonLibrary);
+    $("useLibraryBtn").addEventListener("click", () => useCommonLibrary());
     $("librarySentenceList").addEventListener("click", (event) => {
       const loadButton = event.target.closest("[data-load-library-sentence]");
       if (loadButton) loadLibrarySentenceIntoPractice(loadButton.dataset.loadLibrarySentence);
@@ -9156,8 +9365,13 @@ ${orderNote}`;
         return;
       }
       if (value === "common") {
-        if (!state.library.items.length) await loadCommonLibrary();
-        useCommonLibrary();
+        await reloadMyLibraries();
+        if (!state.libraries.length) {
+          syncCurrentLibrarySelect(state.currentLibraryLabel);
+          openLibraryModal();
+        } else {
+          useCommonLibrary(state.activeLibraryId || state.libraries[0].id);
+        }
       } else if (value === "favorites") {
         useFavoritesLibrary();
       } else if (value === "audio") {

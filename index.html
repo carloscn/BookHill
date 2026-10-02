@@ -6,7 +6,7 @@
   <title>langLSRW</title>
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20260930-6">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-1">
 
 </head>
 <body data-theme="eye" data-active-page="listenPage">
@@ -109,7 +109,7 @@
             <div class="sentence-tool-row">
               <span class="current-library-label">句库：</span>
               <select id="currentLibrarySelect" class="current-library-indicator" aria-label="切换句库">
-                <option value="common">常用句库</option>
+                <option value="common">我的句库</option>
                 <option value="favorites">用户收藏</option>
                 <option value="audio">音频字幕</option>
               </select>
@@ -268,8 +268,8 @@
       </div>
       <div class="library-layout">
         <aside class="library-sidebar" aria-label="句库分类">
-          <button id="librarySettingsTabBtn" class="library-type-button library-settings-button" type="button">自定义句库</button>
-          <button id="commonLibraryTabBtn" class="library-type-button is-active" type="button" aria-current="true">常用句库</button>
+          <button id="commonLibraryTabBtn" class="library-type-button is-active" type="button" aria-current="true">我的句库</button>
+          <button id="librarySettingsTabBtn" class="library-type-button library-settings-button" type="button">导入句库</button>
           <button id="audioLibraryTabBtn" class="library-type-button" type="button" aria-current="false" title="管理音频 + 字幕材料，每句播放原声">音频字幕</button>
           <button class="library-type-button" type="button" disabled>情景句库</button>
           <button class="library-type-button" type="button" disabled>语法句库</button>
@@ -279,12 +279,29 @@
         <section id="commonLibraryPanel" class="library-content">
           <div class="library-summary">
             <div class="library-title-line">
-              <h3 id="libraryName">常用英语句库</h3>
+              <select id="myLibrarySelect" class="my-library-select" aria-label="选择句库"></select>
               <div id="libraryMeta" class="small-note">准备加载...</div>
             </div>
-            <button id="useLibraryBtn" class="primary" type="button" disabled>使用此句库</button>
+            <div class="library-actions">
+              <button id="libraryImportBtn" type="button" title="导入 txt / lrc / tsv 句库">＋ 导入</button>
+              <input id="libraryFileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" hidden>
+              <button id="renameLibraryBtn" type="button" disabled>重命名</button>
+              <button id="exportLibraryBtn" type="button" disabled title="下载为「句子 | 翻译」格式的 txt，可以直接重新导入">导出 txt</button>
+              <button id="deleteLibraryBtn" type="button" disabled>删除</button>
+              <button id="useLibraryBtn" class="primary" type="button" disabled>使用此句库</button>
+            </div>
           </div>
-          <label class="library-search-label" for="librarySearchInput">搜索英文、中文或序号</label>
+          <div id="libraryEmpty" class="library-empty" hidden>
+            <h3>导入你的句库</h3>
+            <p>句库由你自己导入，保存在这台设备上（登录 Google 后会同步到你自己的 Google Drive）。推荐用 txt，每行一句，用「|」分隔两种语言：</p>
+            <pre class="import-example">Hello | 你好
+¿Qué es eso? | 那是什么？
+# 以 # 开头的行是注释</pre>
+            <p>也支持 .tsv（「句子 ⇥ 翻译」或「序号 ⇥ 句子 ⇥ 翻译」）、.lrc，以及 Anki / Tatoeba 导出的文件。同一个文件再导入一次可以选择追加，重复的句子会自动去重。</p>
+            <button id="libraryEmptyImportBtn" class="primary" type="button">＋ 导入句库</button>
+          </div>
+          <div id="libraryBrowse" class="library-browse" hidden>
+          <label class="library-search-label" for="librarySearchInput">搜索原句、翻译或序号</label>
           <input id="librarySearchInput" class="library-search" type="search" autocomplete="off" placeholder="输入关键词">
           <div id="librarySentenceList" class="library-sentence-list"></div>
           <div class="library-pagination">
@@ -298,21 +315,22 @@
             <button id="libraryLastPageBtn" type="button" disabled>最后页</button>
             <span id="libraryStatus" class="library-status" aria-live="polite">尚未加载</span>
           </div>
+          </div>
         </section>
         <section id="librarySettingsPanel" class="library-settings-panel" hidden>
           <div>
-            <h3>自定义句库</h3>
-            <div id="sourceStatus" class="source-status">当前句库：默认示例</div>
+            <h3>导入句库</h3>
+            <div id="sourceStatus" class="source-status">还没有句库</div>
           </div>
-          <label title="选择 .txt 或 .lrc 文件作为句库，只导入文字；音频 + 字幕请在“音频字幕”中导入">
-            导入 txt / lrc 句库
-            <input id="fileInput" type="file" accept=".txt,.lrc,text/plain" title="选择一个 .txt 或 .lrc 文件">
+          <label title="选择 .txt / .lrc / .tsv 文件，先预览再导入为句库；音频 + 字幕请在“音频字幕”中导入">
+            导入 txt / lrc / tsv 句库
+            <input id="fileInput" type="file" accept=".txt,.lrc,.tsv,text/plain,text/tab-separated-values" title="选择一个 .txt、.lrc 或 .tsv 文件">
           </label>
           <label>
-            粘贴句子（一行一句）
+            粘贴句子（一行一句，用「|」分隔翻译）
             <textarea id="sentenceInput" class="sentence-list" spellcheck="false"></textarea>
           </label>
-          <button id="useTextBtn" type="button">使用粘贴内容</button>
+          <button id="useTextBtn" type="button">用粘贴内容新建句库</button>
           <div class="free-translate-row">
             <button type="button" data-free-translate title="用浏览器内置的本机翻译（免费、不需要 API Key）把当前句库中还没有翻译的句子译成中文；需要电脑版 Chrome 或 Edge 138 以上，结果保存在本机，下次导入同样的句子会自动带上">免费翻译当前句库</button>
             <span class="small-note" data-free-translate-status></span>
@@ -335,6 +353,47 @@
             <input id="audioLibraryFileInput" type="file" accept=".lrc,audio/*,.m4a,.mp3,.wav,.ogg,.aac,.flac" multiple title="按住 Ctrl 同时选中音频和 .lrc 两个文件">
           </label>
         </section>
+      </div>
+    </div>
+  </div>
+  <div id="importModal" class="library-modal" hidden>
+    <div class="library-dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+      <div class="library-header">
+        <div>
+          <h2 id="importModalTitle">导入句库</h2>
+          <div id="importSource" class="small-note"></div>
+        </div>
+        <button id="closeImportBtn" type="button">取消</button>
+      </div>
+      <div class="import-body">
+        <div id="importSummary" class="import-summary"></div>
+        <div id="importPreview" class="library-sentence-list import-preview"></div>
+        <label id="importSwapRow" class="check-row">
+          <input id="importSwapToggle" type="checkbox">
+          <span>对调两列：把「|」右边的内容作为练习句子</span>
+        </label>
+        <fieldset class="import-options">
+          <legend>导入到</legend>
+          <label class="radio-row">
+            <input type="radio" name="importTarget" value="new" checked>
+            <span>新建句库</span>
+            <input id="importNameInput" type="text" maxlength="80" aria-label="新句库名称">
+          </label>
+          <label class="radio-row">
+            <input type="radio" name="importTarget" value="append">
+            <span>追加到已有句库</span>
+            <select id="importAppendSelect" aria-label="追加到的句库"></select>
+          </label>
+        </fieldset>
+        <fieldset id="importDuplicateOptions" class="import-options">
+          <legend>追加时遇到已有的句子（不区分大小写和空格）</legend>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="merge" checked><span>合并翻译（推荐）</span></label>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="keep"><span>保留原有翻译</span></label>
+          <label class="radio-row"><input type="radio" name="importDuplicates" value="replace"><span>用新翻译覆盖</span></label>
+        </fieldset>
+      </div>
+      <div class="import-actions">
+        <button id="confirmImportBtn" class="primary" type="button">导入</button>
       </div>
     </div>
   </div>
@@ -788,13 +847,14 @@
   <script src="src/vendor/supabase/supabase-2.117.1.js"></script>
   <script src="src/auth/supabase-auth-service.js?v=20260925-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
-  <script src="src/library.js?v=20260923-1"></script>
+  <script src="src/library-import.js?v=20261002-1"></script>
+  <script src="src/library-store.js?v=20261002-1"></script>
   <script src="src/dictionary/dictionary-service.js?v=20260928-1"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20260928-5"></script>
-  <script src="src/app.js?v=20260930-17"></script>
+  <script src="src/app.js?v=20261002-1"></script>
 </body>
 </html>
