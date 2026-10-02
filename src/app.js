@@ -154,6 +154,15 @@ const fallbackSentences = [
       }
     };
 
+    // lang_srw stored a signed-in Google account as the user "google:<sub>"; that is now the cloud identity,
+    // restored from the saved Google profile, so it must not come back as a local user.
+    function legacyCurrentUser() {
+      const user = localStorage.getItem("langLSRWCurrentUser") || "";
+      if (!user.startsWith("google:")) return user;
+      localStorage.removeItem("langLSRWCurrentUser");
+      return "";
+    }
+
     const state = {
       sentences: normalizeSentenceList(fallbackSentences),
       libraries: [], // the current identity's own libraries for the current learning language
@@ -163,7 +172,7 @@ const fallbackSentences = [
       events: [],
       startedAt: 0,
       finished: false,
-      currentUser: localStorage.getItem("langLSRWCurrentUser") || "",
+      currentUser: legacyCurrentUser(),
       cloudUser: null,
       cloudSyncing: false,
       cloudLastSyncedAt: "",
@@ -474,7 +483,8 @@ const fallbackSentences = [
     }
 
     function getKnownUsers() {
-      return JSON.parse(localStorage.getItem("langLSRWKnownUsers") || "[]");
+      // The previous app version listed Google accounts as "google:<sub>" users; those are now cloud identities.
+      return JSON.parse(localStorage.getItem("langLSRWKnownUsers") || "[]").filter((user) => !String(user).startsWith("google:"));
     }
 
     function saveKnownUser(name) {
@@ -1136,9 +1146,25 @@ const fallbackSentences = [
       return userDataIdentity();
     }
 
+    // The previous app version (lang_srw) kept libraries under the plain user name, or "google:<sub>" for a
+    // Google account. Copy them once to the identity that replaced that owner.
+    async function migrateLegacyLibraries(owner) {
+      const marker = `langLSRWLegacyLibrariesMigrated:${owner}`;
+      if (localStorage.getItem(marker)) return;
+      const legacyOwner = owner.startsWith("local:") ? owner.slice("local:".length)
+        : owner.startsWith("cloud:") ? `google:${owner.slice("cloud:".length)}` : "";
+      if (legacyOwner) {
+        for (const { user: _owner, count: _count, ...library } of await libraryStore.list(legacyOwner)) {
+          if (!(await libraryStore.get(owner, library.id))) await libraryStore.put(owner, { language: "en", ...library });
+        }
+      }
+      localStorage.setItem(marker, "1");
+    }
+
     async function reloadMyLibraries() {
       let all = [];
       try {
+        await migrateLegacyLibraries(libraryOwner());
         all = await libraryStore.list(libraryOwner());
       } catch (error) {
         $("libraryStatus").textContent = `读取本机句库失败：${error.message || error}`;
