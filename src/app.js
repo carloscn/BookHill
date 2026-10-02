@@ -207,6 +207,8 @@ const fallbackSentences = [
       userWordsSelectFirstAfterRender: false,
       userSentencesPage: 1,
       userSentencesPageCount: 1,
+      readingPassageId: null,
+      readingSentenceIndex: -1,
       userSentencesPageRanges: [],
       voices: [],
       lastSpokenWordKey: "",
@@ -483,6 +485,238 @@ const fallbackSentences = [
       refreshWordReviewStatusIcons();
       updateFavoriteReviewLaunchers();
       updateCurrentLibrarySelectAvailability();
+      renderReading();
+      if (!$("passageModal").hidden) renderPassageLibrary();
+    }
+
+    // ---- 读 / 课文库 ------------------------------------------------------------------------
+    // Passages and the whiteboard live in personal data (passage, passageNote), so they export,
+    // import, and sync to the user's Google Drive with the rest of the identity's records.
+    const passageApi = window.langLSRWPassage;
+    let readingNoteTimer = 0;
+    let readingNotePassageId = "";
+
+    function listPassages(languageId = languageScope()) {
+      return userData.entries("passage", languageId)
+        .map(({ key, value, updatedAt }) => ({
+          id: key,
+          title: String(value?.title || "未命名"),
+          body: String(value?.body || ""),
+          updatedAt: updatedAt || 0
+        }))
+        .filter((item) => item.title && item.body)
+        .sort((a, b) => b.updatedAt - a.updatedAt || a.title.localeCompare(b.title, "zh"));
+    }
+
+    function currentReadingPassage() {
+      if (state.readingPassageId === null) {
+        const saved = userData.get("position", "reading", languageScope());
+        state.readingPassageId = typeof saved === "string" ? saved : "";
+      }
+      if (!state.readingPassageId) return null;
+      return listPassages().find((item) => item.id === state.readingPassageId) || null;
+    }
+
+    function readingSentences(passage = currentReadingPassage()) {
+      return passage ? passageApi.splitSentences(passage.body) : [];
+    }
+
+    function readingWordHtml(text) {
+      return getTargetWordPieces(text).map((piece) => (
+        piece.type === "text"
+          ? escapeHtml(piece.text)
+          : `<span class="target-word" data-word="${escapeHtml(piece.text)}">${escapeHtml(piece.text)}</span>`
+      )).join("");
+    }
+
+    function saveReadingNote() {
+      clearTimeout(readingNoteTimer);
+      readingNoteTimer = 0;
+      const id = readingNotePassageId;
+      const box = $("readWhiteboard");
+      if (!id || !box) return;
+      const text = passageApi.normalizeNote(box.value);
+      const scope = languageScope();
+      const previous = userData.get("passageNote", id, scope);
+      if ((previous || "") === text) return;
+      if (text) userData.put("passageNote", id, text, scope);
+      else userData.remove("passageNote", id, scope);
+    }
+
+    function scheduleReadingNoteSave() {
+      clearTimeout(readingNoteTimer);
+      readingNoteTimer = setTimeout(saveReadingNote, 400);
+    }
+
+    function renderReading() {
+      const select = $("readPassageSelect");
+      const article = $("readPassage");
+      if (!select || !article) return;
+      const passages = listPassages();
+      const current = currentReadingPassage();
+      if (state.readingPassageId && !current) {
+        state.readingPassageId = "";
+        state.readingSentenceIndex = -1;
+      }
+      select.innerHTML = passages.length
+        ? passages.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}</option>`).join("")
+        : `<option value="">还没有课文</option>`;
+      select.value = current ? current.id : "";
+      select.disabled = !passages.length;
+      const sentences = readingSentences(current);
+      $("readPassageTitle").textContent = current ? current.title : "读";
+      $("readPassageMeta").textContent = current ? `${sentences.length} 句 · 点一句朗读，右键查词` : "";
+      if (!current) {
+        article.innerHTML = `<p class="read-empty">从课文库载入一篇课文。课文按句子分开，点一句就朗读这一句，右键单词可以查词。</p>`;
+      } else if (!sentences.length) {
+        article.innerHTML = `<p class="read-empty">这篇课文没有可以分开的句子。</p>`;
+      } else {
+        let html = "";
+        let paragraph = -1;
+        sentences.forEach((sentence, index) => {
+          if (sentence.paragraph !== paragraph) {
+            if (paragraph >= 0) html += "</div>";
+            html += `<div class="read-paragraph">`;
+            paragraph = sentence.paragraph;
+          }
+          const currentClass = index === state.readingSentenceIndex ? " is-current" : "";
+          html += `<div class="read-sentence is-hl-${passageApi.highlightIndex(index)}${currentClass}" data-read-sentence="${index}" role="button" tabindex="0">${readingWordHtml(sentence.text)}</div>`;
+        });
+        if (paragraph >= 0) html += "</div>";
+        article.innerHTML = html;
+      }
+      const box = $("readWhiteboard");
+      const noteId = current ? current.id : "scratch";
+      if (document.activeElement !== box || readingNotePassageId !== noteId) {
+        readingNotePassageId = noteId;
+        box.value = String(userData.get("passageNote", noteId, languageScope()) || "");
+      }
+    }
+
+    function loadReadingPassage(id, { closeLibrary = false } = {}) {
+      saveReadingNote();
+      state.readingPassageId = id || "";
+      state.readingSentenceIndex = -1;
+      if (id) userData.put("position", "reading", id, languageScope());
+      if (closeLibrary) closePassageLibrary();
+      setActivePage("readPage");
+    }
+
+    function speakReadingSentence(index) {
+      const sentences = readingSentences();
+      const sentence = sentences[index];
+      if (!sentence) return;
+      state.readingSentenceIndex = index;
+      document.querySelectorAll("#readPassage .read-sentence").forEach((el) => {
+        el.classList.toggle("is-current", Number(el.dataset.readSentence) === index);
+      });
+      const current = document.querySelector(`#readPassage .read-sentence[data-read-sentence="${index}"]`);
+      current?.scrollIntoView({ block: "nearest" });
+      speakText(sentence.text, { rate: currentReplayRate() });
+    }
+
+    function renderPassageLibrary() {
+      const list = $("passageList");
+      const passages = listPassages();
+      const language = currentLearningLanguage();
+      $("passageLibraryNote").textContent = `当前是${language.label}。输入标题和正文，选择语言后保存。保存在这台设备上；登录 Google 后同步到你的 Google Drive。`;
+      if (!passages.length) {
+        list.innerHTML = `<p class="read-empty">还没有${language.label}课文。</p>`;
+        return;
+      }
+      list.innerHTML = passages.map((item) => {
+        const count = passageApi.splitSentences(item.body).length;
+        const current = item.id === state.readingPassageId ? " is-current" : "";
+        return `<div class="passage-row">
+          <button class="passage-item${current}" type="button" data-passage-load="${escapeHtml(item.id)}">
+            <strong>${escapeHtml(item.title)}</strong>
+            <span>${count} 句</span>
+          </button>
+          <button type="button" data-passage-delete="${escapeHtml(item.id)}" title="删除这篇课文">删除</button>
+        </div>`;
+      }).join("");
+    }
+
+    function openPassageLibrary() {
+      $("passageLanguageInput").value = state.learningLanguageId === "es" ? "es" : "en";
+      $("passageFormStatus").textContent = "";
+      renderPassageLibrary();
+      $("passageModal").hidden = false;
+      $("passageTitleInput").focus({ preventScroll: true });
+    }
+
+    function closePassageLibrary() {
+      $("passageModal").hidden = true;
+    }
+
+    async function savePassageFromForm(event) {
+      event.preventDefault();
+      const languageId = $("passageLanguageInput").value === "es" ? "es" : "en";
+      const normalized = passageApi.normalizePassage({
+        title: $("passageTitleInput").value,
+        body: $("passageBodyInput").value,
+        languageId
+      });
+      const status = $("passageFormStatus");
+      if (!normalized) {
+        status.textContent = "请填写标题和正文。";
+        return;
+      }
+      if (normalized.error === "too-long") {
+        status.textContent = `正文超过 ${passageApi.BODY_LIMIT.toLocaleString("zh-CN")} 字，请分成几篇再保存。`;
+        return;
+      }
+      const id = passageApi.createPassageId();
+      userData.put("passage", id, { id, title: normalized.title, body: normalized.body }, languageId);
+      $("passageTitleInput").value = "";
+      $("passageBodyInput").value = "";
+      if (languageId === languageScope()) {
+        status.textContent = "已保存，并载入到读页面。";
+        loadReadingPassage(id);
+        renderPassageLibrary();
+        return;
+      }
+      const label = languageId === "es" ? "西班牙语" : "英语";
+      status.textContent = `已保存到${label}课文库。切换页头的「${languageId === "es" ? "西" : "英"}」后可以载入。`;
+      renderPassageLibrary();
+    }
+
+    async function deletePassage(id) {
+      const item = listPassages().find((passage) => passage.id === id);
+      if (!item) return;
+      const confirmed = await showAppConfirm(`删除课文「${item.title}」？旁边的白板也会一起删除。`, {
+        title: "删除课文",
+        okText: "删除"
+      });
+      if (!confirmed) return;
+      const scope = languageScope();
+      userData.remove("passage", id, scope);
+      userData.remove("passageNote", id, scope);
+      if (state.readingPassageId === id) {
+        state.readingPassageId = "";
+        state.readingSentenceIndex = -1;
+        readingNotePassageId = "";
+        userData.remove("position", "reading", scope);
+      }
+      renderReading();
+      renderPassageLibrary();
+    }
+
+    function fillPassageFromFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || "");
+        $("passageBodyInput").value = text;
+        if (!$("passageTitleInput").value.trim()) {
+          $("passageTitleInput").value = file.name.replace(/\.txt$/i, "");
+        }
+        $("passageFormStatus").textContent = "已从文件填入正文，确认标题和语言后保存。";
+      };
+      reader.onerror = () => {
+        $("passageFormStatus").textContent = "无法读取这个文件。";
+      };
+      reader.readAsText(file);
     }
 
     function saveLastPosition() {
@@ -3831,6 +4065,7 @@ const fallbackSentences = [
       }
       rememberDictionaryWordCategory();
       stopSpeech();
+      saveReadingNote();
       closeDictionaryLookup();
       state.learningLanguageId = language.id;
       if (persist) persistSetting("learningLanguage", language.id);
@@ -3853,6 +4088,10 @@ const fallbackSentences = [
         state.userWordsPage = 1;
         renderUserPhrases();
       }
+      state.readingPassageId = null;
+      state.readingSentenceIndex = -1;
+      renderReading();
+      if (!$("passageModal").hidden) renderPassageLibrary();
       renderAccentOptions();
       // Each learning language practises its own common library, resuming that language's last position.
       resetCommonLibraryState();
@@ -4203,6 +4442,7 @@ const fallbackSentences = [
     function setActivePage(pageId) {
       const page = document.getElementById(pageId);
       if (!page) return;
+      const previousPage = state.activePage;
       state.activePage = pageId;
       document.body.dataset.activePage = pageId;
       if (pageId !== "listenPage") {
@@ -4220,7 +4460,11 @@ const fallbackSentences = [
         tab.classList.toggle("active", isActive);
         tab.setAttribute("aria-current", isActive ? "page" : "false");
       });
+      if (previousPage === "readPage" && pageId !== "readPage" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
       if (pageId === "listenPage") renderSpeakingPage();
+      if (pageId === "readPage") renderReading();
     }
 
     function normalizeShortcutEvent(event) {
@@ -4369,7 +4613,13 @@ ${orderNote}`;
         if (word) speakText(word, { rate: currentReplayRate() });
         return true;
       }
-      if (document.querySelector(".font-menu[open], .user-menu[open]") || !$("settingsModal").hidden || !$("libraryModal").hidden) return false;
+      if (document.querySelector(".font-menu[open], .user-menu[open]") || !$("settingsModal").hidden || !$("libraryModal").hidden || !$("passageModal").hidden) return false;
+      if (state.activePage === "readPage") {
+        const sentences = readingSentences();
+        if (!sentences.length) return false;
+        speakReadingSentence(state.readingSentenceIndex >= 0 ? state.readingSentenceIndex : 0);
+        return true;
+      }
       if (state.activePage === "listenPage") {
         speakCurrentSentence();
         return true;
@@ -4386,6 +4636,7 @@ ${orderNote}`;
         document.querySelector(".font-menu[open], .user-menu[open]")
         || !$("settingsModal").hidden
         || !$("libraryModal").hidden
+        || !$("passageModal").hidden
         || !$("importModal").hidden
         || !$("dictionaryLibraryModal").hidden
         || !$("userPhrasesModal").hidden
@@ -4435,6 +4686,11 @@ ${orderNote}`;
       if (event.key === "Escape" && !$("importModal").hidden) {
         event.preventDefault();
         closeImportDialog();
+        return;
+      }
+      if (event.key === "Escape" && !$("passageModal").hidden) {
+        event.preventDefault();
+        closePassageLibrary();
         return;
       }
       // 单词练习: the 按住说话 shortcut holds the same recognition as the button (keydown starts, keyup stops).
@@ -10716,6 +10972,62 @@ ${orderNote}`;
 
     document.querySelectorAll(".page-tab").forEach((tab) => {
       tab.addEventListener("click", () => setActivePage(tab.dataset.pageTarget));
+    });
+
+    $("openPassageLibraryBtn").addEventListener("click", openPassageLibrary);
+    $("readOpenPassageBtn").addEventListener("click", openPassageLibrary);
+    $("closePassageBtn").addEventListener("click", closePassageLibrary);
+    $("passageModal").addEventListener("click", (event) => {
+      if (event.target === $("passageModal")) closePassageLibrary();
+    });
+    $("passageForm").addEventListener("submit", savePassageFromForm);
+    $("passageFileBtn").addEventListener("click", () => $("passageFileInput").click());
+    $("passageFileInput").addEventListener("change", () => {
+      const [file] = $("passageFileInput").files || [];
+      $("passageFileInput").value = "";
+      fillPassageFromFile(file);
+    });
+    $("passageList").addEventListener("click", (event) => {
+      const load = event.target.closest("[data-passage-load]");
+      if (load) {
+        loadReadingPassage(load.dataset.passageLoad, { closeLibrary: true });
+        return;
+      }
+      const remove = event.target.closest("[data-passage-delete]");
+      if (remove) deletePassage(remove.dataset.passageDelete);
+    });
+    $("readPassageSelect").addEventListener("change", () => {
+      const id = $("readPassageSelect").value;
+      if (id) loadReadingPassage(id);
+    });
+    $("readWhiteboard").addEventListener("input", scheduleReadingNoteSave);
+    $("readWhiteboard").addEventListener("change", saveReadingNote);
+    window.addEventListener("pagehide", saveReadingNote);
+    $("readPassage").addEventListener("click", (event) => {
+      const sentence = event.target.closest(".read-sentence");
+      if (!sentence || String(window.getSelection?.() || "").trim()) return;
+      speakReadingSentence(Number(sentence.dataset.readSentence));
+    });
+    $("readPassage").addEventListener("keydown", (event) => {
+      const sentence = event.target.closest(".read-sentence");
+      if (!sentence || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      speakReadingSentence(Number(sentence.dataset.readSentence));
+    });
+    $("readPassage").addEventListener("contextmenu", (event) => {
+      const wordEl = event.target.closest?.(".target-word");
+      if (!wordEl) return;
+      event.preventDefault();
+      lookupTargetWord(wordEl, event);
+    });
+    $("readPassage").addEventListener("mousedown", (event) => {
+      const wordEl = event.target.closest?.(".target-word");
+      if (!wordEl || event.button !== 1) return;
+      event.preventDefault();
+      speakTargetWord(wordEl);
+    });
+    $("readPassage").addEventListener("auxclick", (event) => {
+      if (event.button === 1) event.preventDefault();
     });
 
     document.querySelectorAll("[data-language-id]").forEach((button) => {

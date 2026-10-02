@@ -34,7 +34,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261003-4">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-5">
 
 </head>
 <body data-active-page="listenPage">
@@ -107,6 +107,7 @@
         <button id="themeToggleBtn" class="theme-toggle" type="button" aria-label="切换浅色/深色">深色</button>
         <button id="openLibraryBtn" type="button">句库</button>
         <button id="openDictionaryLibraryBtn" type="button">词库</button>
+        <button id="openPassageLibraryBtn" type="button">课文库</button>
         <button id="userPhrasesBtn" type="button">收藏</button>
         <button id="openSettingsBtn" type="button" title="打开设置（字体、快捷键、练习、AI 接口等）">设置</button>
         <details class="user-menu">
@@ -279,9 +280,23 @@
     </section>
 
     <section id="readPage" class="learning-page">
-      <div class="placeholder-page">
-        <h2>读</h2>
-        <p>阅读练习页会放文章阅读、句子收藏、生词标记和跟读朗读。</p>
+      <div class="read-layout">
+        <div class="read-toolbar">
+          <label class="read-toolbar-label" for="readPassageSelect">课文</label>
+          <select id="readPassageSelect" aria-label="载入课文"></select>
+          <button id="readOpenPassageBtn" type="button">课文库</button>
+          <span id="readPassageMeta" class="small-note"></span>
+        </div>
+        <div class="read-columns">
+          <article class="read-article">
+            <h2 id="readPassageTitle" class="read-title">读</h2>
+            <div id="readPassage" class="read-passage" aria-label="课文正文"></div>
+          </article>
+          <aside class="read-board">
+            <label for="readWhiteboard">白板</label>
+            <textarea id="readWhiteboard" spellcheck="false" placeholder="在这里随便写。载入课文后，白板跟这篇课文一起保存；登录 Google 后同步到你的 Google Drive。"></textarea>
+          </aside>
+        </div>
       </div>
     </section>
 
@@ -299,6 +314,39 @@
       <span>鸣谢 <a href="https://apps.ankiweb.net/" target="_blank" rel="noopener">Anki</a>（apps.ankiweb.net）</span>
     </footer>
   </main>
+  <div id="passageModal" class="library-modal" hidden>
+    <div class="library-dialog passage-dialog" role="dialog" aria-modal="true" aria-labelledby="passageModalTitle">
+      <div class="library-header">
+        <div>
+          <h2 id="passageModalTitle">课文库</h2>
+          <div id="passageLibraryNote" class="small-note">输入标题和正文，选择语言后保存。保存在这台设备上；登录 Google 后同步到你的 Google Drive。</div>
+        </div>
+        <button id="closePassageBtn" type="button">关闭</button>
+      </div>
+      <div class="passage-layout">
+        <section class="passage-list-pane" aria-label="已保存的课文">
+          <div id="passageList" class="passage-list"></div>
+        </section>
+        <form id="passageForm" class="passage-form">
+          <label for="passageTitleInput">标题</label>
+          <input id="passageTitleInput" type="text" maxlength="120" autocomplete="off" required placeholder="课文标题">
+          <label for="passageLanguageInput">语言</label>
+          <select id="passageLanguageInput" aria-label="语言类别">
+            <option value="en">英语</option>
+            <option value="es">西班牙语</option>
+          </select>
+          <label for="passageBodyInput">正文</label>
+          <textarea id="passageBodyInput" required placeholder="把文章粘贴在这里。空行会分成段落，句号、问号和感叹号会分成句子。"></textarea>
+          <div class="passage-form-actions">
+            <button id="passageFileBtn" type="button">从 txt 填入</button>
+            <input id="passageFileInput" type="file" accept=".txt,text/plain" hidden>
+            <button id="passageSaveBtn" class="primary" type="submit">保存到课文库</button>
+          </div>
+          <div id="passageFormStatus" class="small-note" role="status"></div>
+        </form>
+      </div>
+    </div>
+  </div>
   <div id="libraryModal" class="library-modal" hidden>
     <div class="library-dialog" role="dialog" aria-modal="true" aria-labelledby="libraryModalTitle">
       <div class="library-header">
@@ -935,13 +983,14 @@
   <script src="src/secret-store.js?v=20261003-1"></script>
   <script src="src/syntax-tree.js?v=20261003-1"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
+  <script src="src/passage.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
   <script src="src/dictionary/dictionary-service.js?v=20261003-1"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20261002-1"></script>
-  <script src="src/app.js?v=20261003-5"></script>
+  <script src="src/user-data.js?v=20261002-2"></script>
+  <script src="src/app.js?v=20261002-6"></script>
 </body>
 </html>
