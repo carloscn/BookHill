@@ -35,12 +35,9 @@ const fallbackSentences = [
       togglePractice: "Alt+R"
     };
 
-    const themes = [
-      { id: "eye", label: "护眼" },
-      { id: "light", label: "白天" },
-      { id: "gray", label: "深灰" },
-      { id: "black", label: "黑夜" }
-    ];
+    // Theme = { mode: "system" | "light" | "dark", palette } — the nav.mltz.tech model (see index.html's boot script).
+    const palettes = ["default", "github", "reddit", "twitter", "anki"];
+    const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
 
     const englishFontPresets = {
       default: '"Segoe UI", Arial, sans-serif',
@@ -163,6 +160,27 @@ const fallbackSentences = [
       return "";
     }
 
+    function readBootTheme() {
+      try {
+        return JSON.parse(localStorage.getItem("langLSRWBootTheme") || "null");
+      } catch {
+        return null;
+      }
+    }
+
+    // Accepts the current { mode, palette } value and BookHill's old theme names (护眼 eye / 白天 light / 深灰 gray /
+    // 黑夜 black), which become light/dark on the default palette; 护眼 follows the system.
+    function normalizeTheme(theme) {
+      if (typeof theme === "string") {
+        const mode = { light: "light", gray: "dark", black: "dark", dark: "dark" }[theme] || "system";
+        return { mode, palette: "default" };
+      }
+      return {
+        mode: ["light", "dark"].includes(theme?.mode) ? theme.mode : "system",
+        palette: palettes.includes(theme?.palette) ? theme.palette : "default"
+      };
+    }
+
     const state = {
       sentences: normalizeSentenceList(fallbackSentences),
       libraries: [], // the current identity's own libraries for the current learning language
@@ -200,7 +218,7 @@ const fallbackSentences = [
       fontSettings: fontDefaults(),
       grammarColors: grammarColorDefaults(),
       // The theme starts from the browser's cache of the last shown theme (see applyTheme()).
-      theme: document.body.dataset.theme || "eye",
+      theme: normalizeTheme(readBootTheme()),
       activePage: loadActiveLearningPage(),
       // The learning language is a per-identity setting, applied once the identity's data opens; English until then.
       learningLanguageId: "en",
@@ -3193,7 +3211,7 @@ const fallbackSentences = [
     // What a new identity starts with.
     function defaultSettingValue(name) {
       return {
-        theme: "eye",
+        theme: { mode: "system", palette: "default" },
         shortcuts: { ...defaultShortcuts },
         speech: {},
         fonts: fontDefaults(),
@@ -3814,26 +3832,31 @@ const fallbackSentences = [
     }
 
     function applyTheme(theme, { persist = true } = {}) {
-      const themeMap = { dark: "black" };
-      const nextTheme = themeMap[theme] || theme;
-      state.theme = themes.some((item) => item.id === nextTheme) ? nextTheme : "eye";
-      document.body.dataset.theme = state.theme;
+      state.theme = normalizeTheme(theme);
+      const mode = state.theme.mode === "system" ? (colorSchemeQuery?.matches ? "dark" : "light") : state.theme.mode;
+      document.documentElement.dataset.theme = mode;
+      document.documentElement.dataset.palette = state.theme.palette;
       // Browser cache of the last shown theme, read by index.html before the page renders so opening the page does
       // not flash another background; the identity's theme setting stays authoritative.
       try {
-        localStorage.setItem("langLSRWBootTheme", state.theme);
+        localStorage.setItem("langLSRWBootTheme", JSON.stringify(state.theme));
       } catch {
         /* ignore storage errors */
       }
-      const current = themes.find((item) => item.id === state.theme);
-      $("themeToggleBtn").textContent = current.label;
-      $("themeToggleBtn").title = `背景：${current.label}`;
+      $("themeToggleBtn").textContent = mode === "dark" ? "浅色" : "深色";
+      $("themeToggleBtn").title = `${mode === "dark" ? "切换到浅色" : "切换到深色"}${state.theme.mode === "system" ? "（现在跟随系统）" : ""}`;
+      if ($("paletteSelect").value !== state.theme.palette) $("paletteSelect").value = state.theme.palette;
       if (persist) persistSetting("theme", state.theme);
     }
 
+    // An explicit click fixes light/dark; until then the page follows the system setting.
     function toggleTheme() {
-      const currentIndex = Math.max(0, themes.findIndex((item) => item.id === state.theme));
-      applyTheme(themes[(currentIndex + 1) % themes.length].id);
+      const dark = document.documentElement.dataset.theme === "dark";
+      applyTheme({ ...state.theme, mode: dark ? "light" : "dark" });
+    }
+
+    function applyPalette(palette) {
+      applyTheme({ ...state.theme, palette });
     }
 
     function applyFontSettings(settings, { persist = true } = {}) {
@@ -10371,6 +10394,10 @@ ${orderNote}`;
     });
 
     $("themeToggleBtn").addEventListener("click", toggleTheme);
+    $("paletteSelect").addEventListener("change", (event) => applyPalette(event.target.value));
+    colorSchemeQuery?.addEventListener?.("change", () => {
+      if (state.theme.mode === "system") applyTheme(state.theme, { persist: false });
+    });
     $("openSettingsBtn").addEventListener("click", openSettings);
     $("closeSettingsBtn").addEventListener("click", closeSettings);
     document.querySelectorAll("[data-settings-tab]").forEach((button) => {
