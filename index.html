@@ -6,6 +6,8 @@
   <title>langLSRW</title>
   <!-- Public OAuth client ID (Google sign-in + Drive) and browser API key for the Sheets Picker; both are restricted to this site's origins. -->
   <meta name="google-client-id" content="180213407454-r5uujgmro3f0o8opcens160nkrn3s85q.apps.googleusercontent.com">
+  <!-- Free sentence-component parser (spaCy, services/parser) behind nginx on the same origin. -->
+  <meta name="syntax-parser-url" content="/api/parse">
   <meta name="google-api-key" content="AIzaSyBVHLOHo33UvlhmQPrVwcNmSlbOrUTFgeY">
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
@@ -27,7 +29,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261003-1">
+  <link rel="stylesheet" href="src/styles.css?v=20261003-2">
 
 </head>
 <body data-active-page="listenPage">
@@ -181,6 +183,7 @@
                   <button id="decreaseSpeechRateBtn" type="button" title="减慢朗读" aria-label="减慢朗读">▼</button>
                 </span>
               </div>
+              <button id="syntaxAnalyzeBtn" type="button">成分分析</button>
               <button id="analyzeGrammarBtn" type="button">Ai语法分析</button>
               <div class="sentence-tool-end">
                 <div id="counter" class="counter" aria-label="句子序号">
@@ -913,14 +916,15 @@
   <script src="src/cloud-sync.js?v=20261002-1"></script>
   <script src="src/google-drive.js?v=20261002-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
+  <script src="src/syntax-tree.js?v=20261003-1"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20261002-3"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261003-1"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20261002-1"></script>
-  <script src="src/app.js?v=20261003-1"></script>
+  <script src="src/app.js?v=20261003-3"></script>
 </body>
 </html>

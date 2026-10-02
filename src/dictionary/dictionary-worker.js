@@ -73,7 +73,12 @@ function wordListFilter(options) {
   const words = Array.isArray(options?.wordList) ? options.wordList : null;
   if (!words) return null;
   const unique = [...new Set(words.map((word) => String(word || "").trim()).filter(Boolean))];
-  return { where: "stardict.word COLLATE NOCASE IN (SELECT value FROM json_each(?))", bind: JSON.stringify(unique) };
+  return {
+    where: "stardict.word COLLATE NOCASE IN (SELECT value FROM json_each(?))",
+    bind: JSON.stringify(unique),
+    // sort "imported": the list's own order (position of the word in the list); needs the list bound once more.
+    importedOrder: "(SELECT min(CAST(key AS INTEGER)) FROM json_each(?) WHERE value = stardict.word COLLATE NOCASE), stardict.word COLLATE NOCASE"
+  };
 }
 
 function listProfile(dictionary) {
@@ -395,9 +400,11 @@ async function list(payload = {}) {
   const total = Number(bindings.length ? database.selectValue(countSql, bindings) : database.selectValue(countSql)) || 0;
   const pageCount = Math.max(1, Math.ceil(total / normalizedPageSize));
   const normalizedPage = Math.max(1, Math.min(Number(page) || 1, pageCount));
+  const imported = wordList && sort === "imported";
+  const orderBy = imported ? wordList.importedOrder : (profile.orderBy[sort] || profile.orderBy.alphabetical);
   const rows = database.selectArrays(
-    `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE ${where} ORDER BY ${profile.orderBy[sort] || profile.orderBy.alphabetical} LIMIT ? OFFSET ?`,
-    [...bindings, normalizedPageSize, (normalizedPage - 1) * normalizedPageSize]
+    `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
+    [...bindings, ...(imported ? [wordList.bind] : []), normalizedPageSize, (normalizedPage - 1) * normalizedPageSize]
   ).map(([id, word, collins]) => ({ id, word, collins: Number(collins) || 0 }));
   return { rows, total, page: normalizedPage, pageSize: normalizedPageSize, pageCount };
 }
@@ -417,9 +424,11 @@ async function studyList(payload = {}) {
     ? `AND lower(stardict.word) NOT IN (${normalizedExcludeWords.map(() => "?").join(",")})`
     : "";
   const source = listSource(dictionary, profile, wordList ? "all" : category, sort);
+  const imported = wordList && sort === "imported";
+  const orderBy = imported ? wordList.importedOrder : (profile.orderBy[sort] || profile.orderBy.alphabetical);
   return database.selectArrays(
-    `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE stardict.word GLOB '${profile.firstLetter}*' AND instr(trim(stardict.word), ' ') = 0 AND (${categoryWhere}) ${excludeWhere} ORDER BY ${profile.orderBy[sort] || profile.orderBy.alphabetical}`,
-    [...(wordList ? [wordList.bind] : []), ...normalizedExcludeWords]
+    `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE stardict.word GLOB '${profile.firstLetter}*' AND instr(trim(stardict.word), ' ') = 0 AND (${categoryWhere}) ${excludeWhere} ORDER BY ${orderBy}`,
+    [...(wordList ? [wordList.bind] : []), ...normalizedExcludeWords, ...(imported ? [wordList.bind] : [])]
   ).map(([id, word, collins]) => ({ id, word, collins: Number(collins) || 0 }));
 }
 

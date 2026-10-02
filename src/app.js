@@ -224,6 +224,8 @@ const fallbackSentences = [
       learningLanguageId: "en",
       currentLibraryLabel: "示例句库",
       grammarLoading: false,
+      grammarSource: "ai", // "ai" | "syntax": which analysis the grammar panel shows
+      syntaxLoading: false,
       grammarVisible: false,
       translationEditing: false,
       translationDraft: "",
@@ -1771,7 +1773,44 @@ const fallbackSentences = [
       renderWordListActions();
     }
 
+    // Word position in a list (lower-cased word -> index), for the 「导入顺序」 sort of favourites / 测验 filters.
+    function wordListOrder(category) {
+      const list = wordList(wordListId(category));
+      const order = new Map();
+      (list?.words || []).forEach(([word], index) => {
+        const key = String(word).trim().toLowerCase();
+        if (!order.has(key)) order.set(key, index);
+      });
+      return order;
+    }
+
+    // 「导入顺序」 exists only for word lists, and is what a word list opens with; leaving a word list drops it.
+    function syncWordListSortOption() {
+      const select = $("dictionarySortSelect");
+      const isList = Boolean(wordListId($("dictionaryCategorySelect").value));
+      let option = select.querySelector('option[value="imported"]');
+      if (isList && !option) {
+        option = document.createElement("option");
+        option.value = "imported";
+        option.textContent = "导入顺序";
+        select.prepend(option);
+      }
+      if (isList && state.dictionarySortBeforeList === undefined) {
+        state.dictionarySortBeforeList = select.value;
+        select.value = "imported";
+      }
+      if (!isList) {
+        if (option) option.remove();
+        if (state.dictionarySortBeforeList !== undefined) {
+          if ([...select.options].some((item) => item.value === state.dictionarySortBeforeList)) select.value = state.dictionarySortBeforeList;
+          state.dictionarySortBeforeList = undefined;
+        }
+        if (!select.value && select.options.length) select.value = select.options[0].value;
+      }
+    }
+
     function renderWordListActions() {
+      syncWordListSortOption();
       const list = wordList(wordListId($("dictionaryCategorySelect").value));
       $("wordListManage").hidden = !list;
       $("wordListSheetUpdateBtn").hidden = !list?.sheet;
@@ -2882,12 +2921,86 @@ const fallbackSentences = [
       return state.grammarLoading && state.sentences === state.grammarLoadingSentences && state.index === state.grammarLoadingIndex;
     }
 
+    // ---- Syntax parser (free, instant; services/parser + src/syntax-tree.js). Results are cached in memory per
+    // language + sentence and never mixed with the AI grammar cache (which is part of the synced personal data).
+    const syntaxTree = window.langLSRWSyntaxTree;
+    const syntaxCache = new Map();
+    const syntaxLanguages = new Set(["en", "es"]);
+
+    function syntaxParserUrl() {
+      // Local development can point at a local container: localStorage.langLSRWParserUrl = "http://127.0.0.1:18300/api/parse"
+      let override = "";
+      try {
+        override = localStorage.getItem("langLSRWParserUrl") || "";
+      } catch {}
+      if (override) return override;
+      const configured = document.querySelector('meta[name="syntax-parser-url"]')?.content || "/api/parse";
+      // The local static server has no /api: use production (it allows localhost via CORS).
+      if (configured.startsWith("/") && ["localhost", "127.0.0.1"].includes(location.hostname)) {
+        return `https://lang.mltz.tech${configured}`;
+      }
+      return configured;
+    }
+
+    function syntaxKey(sentence = currentSentence()) {
+      return `${state.learningLanguageId}\n${sentence}`;
+    }
+
+    function displayedGrammar() {
+      return state.grammarSource === "syntax" ? (syntaxCache.get(syntaxKey()) || "") : currentGrammar();
+    }
+
+    async function analyzeCurrentSyntax() {
+      const sentence = currentSentence();
+      const language = state.learningLanguageId;
+      if (!sentence || state.syntaxLoading) return;
+      if (!syntaxLanguages.has(language)) {
+        alert("成分分析目前支持英语和西班牙语。");
+        return;
+      }
+      // Clicking again while it is shown hides it.
+      if (state.grammarVisible && state.grammarSource === "syntax") {
+        state.grammarVisible = false;
+        renderTarget();
+        return;
+      }
+      state.grammarSource = "syntax";
+      if (!syntaxCache.has(syntaxKey())) {
+        state.syntaxLoading = true;
+        state.grammarVisible = true;
+        renderTarget();
+        try {
+          const response = await fetch(syntaxParserUrl(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: sentence.slice(0, 500), lang: language })
+          });
+          if (response.status === 429) throw new Error("请求太频繁了，请稍等几秒再试。");
+          if (response.status === 422 || response.status === 413) throw new Error("这句话太长（最多 500 个字符）或语言不受支持。");
+          if (!response.ok) throw new Error(`句法分析服务暂时不可用（HTTP ${response.status}）。`);
+          const tree = syntaxTree.build(await response.json());
+          syntaxCache.set(`${language}\n${sentence}`, JSON.stringify(tree));
+        } catch (error) {
+          state.grammarVisible = false;
+          alert(error instanceof TypeError ? "连不上句法分析服务，请检查网络后再试。" : (error.message || error));
+        } finally {
+          state.syntaxLoading = false;
+        }
+      }
+      if (currentSentence() !== sentence) return; // the learner moved on meanwhile
+      state.grammarVisible = syntaxCache.has(syntaxKey());
+      renderTarget();
+    }
+
     function renderGrammarAnalysis() {
       if (isAnalysingCurrentSentence()) {
         return '<div class="grammar-panel is-loading">正在分析语法...</div>';
       }
+      if (state.syntaxLoading && state.grammarSource === "syntax") {
+        return '<div class="grammar-panel is-loading">正在分析句子成分...</div>';
+      }
       if (!state.grammarVisible) return "";
-      const grammar = currentGrammar();
+      const grammar = displayedGrammar();
       if (!grammar) return '<div class="grammar-panel grammar-visual"><div class="grammar-toolbar"><div class="grammar-pattern"><span>句子成分</span></div></div><div class="grammar-empty">当前体系暂无分析</div></div>';
       const parsed = parseGrammarAnalysis(grammar);
       if (!parsed) return `<div class="grammar-panel">${escapeHtml(grammar).replace(/\n/g, "<br>")}</div>`;
@@ -2903,7 +3016,9 @@ const fallbackSentences = [
         .replace(/）/g, ")")
         .replace(/\s*\+\s*/g, " + ");
       const provenance = grammarAnalysisProvenance(parsed);
-      const analysisLabel = `句子成分${provenance.legacy ? " · 旧版" : ""}${parsed.status === "partial" ? " · 部分分析" : ""}`;
+      const bySyntax = parsed.convention === "syntax-parser/1";
+      if (bySyntax) provenance.label = `句法分析器自动生成（${parsed.source || "spaCy"}），可能有误；需要讲解请用「Ai语法分析」`;
+      const analysisLabel = `句子成分${bySyntax ? " · 自动分析" : ""}${provenance.legacy && !bySyntax ? " · 旧版" : ""}${parsed.status === "partial" ? " · 部分分析" : ""}`;
       const patternHtml = pattern
         ? `<div class="grammar-pattern"><span title="${escapeHtml(provenance.label)}">${analysisLabel}</span><span aria-hidden="true">·</span><strong>${escapeHtml(pattern)}</strong></div>`
         : `<div class="grammar-pattern"><span title="${escapeHtml(provenance.label)}">${analysisLabel}</span></div>`;
@@ -3091,6 +3206,7 @@ const fallbackSentences = [
 
     async function analyzeCurrentGrammar({ force = false } = {}) {
       if (state.grammarLoading || !currentLearningLanguage().grammarAnalysisEnabled) return;
+      state.grammarSource = "ai";
       const sentence = currentSentence();
       if (!sentence) return;
       const cachedGrammar = currentGrammar();
@@ -5425,12 +5541,16 @@ ${orderNote}`;
     }
 
     function sortDictionaryLearningItems(items, sort) {
+      const importOrder = sort === "imported" ? wordListOrder($("dictionaryCategorySelect").value) : null;
       const alphabetical = (left, right) => String(left.word).localeCompare(String(right.word), currentLearningLanguage().id, { sensitivity: "base" });
       return [...items].sort((left, right) => {
         if (sort === "favorites") return favoriteDictionarySort(left, right);
         if (sort === "collins") return (Number(right.collins) || 0) - (Number(left.collins) || 0) || alphabetical(left, right);
         if (sort === "bnc") return dictionarySortValue(left, "bnc") - dictionarySortValue(right, "bnc") || alphabetical(left, right);
         if (sort === "frq") return dictionarySortValue(left, "frq") - dictionarySortValue(right, "frq") || alphabetical(left, right);
+        if (sort === "imported" && importOrder) {
+          return (importOrder.get(String(left.word).toLowerCase()) ?? Infinity) - (importOrder.get(String(right.word).toLowerCase()) ?? Infinity) || alphabetical(left, right);
+        }
         return alphabetical(left, right);
       });
     }
@@ -9146,6 +9266,12 @@ ${orderNote}`;
       const target = currentSentence();
       const translation = currentTranslation();
       const hasGrammarCache = Boolean(currentGrammar());
+      const syntaxSupported = syntaxLanguages.has(state.learningLanguageId);
+      $("syntaxAnalyzeBtn").disabled = !syntaxSupported;
+      $("syntaxAnalyzeBtn").classList.toggle("is-active", state.grammarVisible && state.grammarSource === "syntax");
+      $("syntaxAnalyzeBtn").title = syntaxSupported
+        ? "免费、即时的句子成分分析（句法分析器，可能有误）"
+        : "成分分析目前支持英语和西班牙语";
       $("analyzeGrammarBtn").classList.toggle("has-cache", hasGrammarCache);
       const grammarAvailable = currentLearningLanguage().grammarAnalysisEnabled;
       if (!state.grammarLoading) $("analyzeGrammarBtn").disabled = !grammarAvailable;
@@ -10036,6 +10162,7 @@ ${orderNote}`;
     $("increaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(1));
     $("decreaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(-1));
     $("analyzeGrammarBtn").addEventListener("click", () => analyzeCurrentGrammar());
+    $("syntaxAnalyzeBtn").addEventListener("click", () => analyzeCurrentSyntax());
     $("analyzeGrammarBtn").addEventListener("contextmenu", openGrammarContextMenu);
     $("traditionalGrammarMenuBtn").addEventListener("click", closeGrammarContextMenu);
     $("showAiPromptMenuBtn").addEventListener("click", () => {

@@ -1,0 +1,20 @@
+# langLSRW syntax parser. Listens on 127.0.0.1:18300 only; nginx proxies
+# https://lang.mltz.tech/api/parse to it (rate-limited). Stateless, no volumes.
+services:
+  parser:
+    build: .
+    image: langlsrw-parser:latest
+    container_name: langlsrw-parser
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18300:8000"
+    environment:
+      ALLOWED_ORIGINS: "https://lang.mltz.tech,http://localhost:8848,http://localhost:8849"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 700m
+    cpus: 1.0
+    pids_limit: 64

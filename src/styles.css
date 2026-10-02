@@ -6198,3 +6198,9 @@
         flex-wrap: wrap;
       }
     }
+
+    #syntaxAnalyzeBtn.is-active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+    }
