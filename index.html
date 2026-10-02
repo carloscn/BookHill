@@ -29,7 +29,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261003-2">
+  <link rel="stylesheet" href="src/styles.css?v=20261003-3">
 
 </head>
 <body data-active-page="listenPage">
@@ -584,7 +584,7 @@
                 <button id="resetPracticeSettingsBtn" type="button" title="把练习每组数量、间隔扩大系数和掌握标准恢复为默认值">恢复默认值</button>
               </div>
             </div>
-            <div class="settings-section" data-settings-panel="ai" data-settings-intro="AI 语法分析等功能使用的接口。API Key 只保存在本机，不会导出或同步。" hidden>
+            <div class="settings-section" data-settings-panel="ai" data-settings-intro="AI 语法分析等功能使用的接口。API Key 加密保存在本机，不会导出或同步。" hidden>
               <div class="settings-section-title">AI 接口</div>
               <label>
                 接口地址
@@ -596,9 +596,20 @@
               </label>
               <label>
                 API Key
-                <input id="aiApiKeyInput" type="password" title="你的 API Key；只保存在本机浏览器，不会导出或同步" autocomplete="off" placeholder="只保存在当前浏览器">
+                <input id="aiApiKeyInput" type="password" title="你的 API Key；加密保存在本机浏览器，不会导出或同步" autocomplete="off" placeholder="留空则保留已保存的 Key">
               </label>
-              <button id="saveAiSettingsBtn" type="button" title="保存接口地址、模型和 API Key">保存 AI 设置</button>
+              <div id="aiKeyState" class="small-note"></div>
+              <fieldset class="ai-protection">
+                <legend>API Key 的保护方式</legend>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="device" checked><span>本机加密（推荐）：用这台设备上不可导出的密钥加密，换设备无法解开</span></label>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="passphrase"><span>解锁密码：再用你设的密码加密，每次打开页面第一次使用时输入</span></label>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="session"><span>只用这一次：不保存，关闭页面后忘记</span></label>
+                <input id="aiPassphraseInput" type="password" autocomplete="new-password" placeholder="解锁密码（至少 6 位）" hidden>
+              </fieldset>
+              <div class="ai-settings-actions">
+                <button id="saveAiSettingsBtn" type="button" title="保存接口地址、模型和 API Key">保存 AI 设置</button>
+                <button id="forgetAiKeyBtn" type="button" title="删除这台设备上保存的 API Key">删除 Key</button>
+              </div>
               <div id="aiSettingsStatus" class="small-note" aria-live="polite"></div>
             </div>
             <div class="settings-section" data-settings-panel="dictionary" data-settings-intro="本机安装的词典，用于查词、词库和背单词。" hidden>
@@ -916,6 +927,7 @@
   <script src="src/cloud-sync.js?v=20261002-1"></script>
   <script src="src/google-drive.js?v=20261002-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
+  <script src="src/secret-store.js?v=20261003-1"></script>
   <script src="src/syntax-tree.js?v=20261003-1"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
@@ -925,6 +937,6 @@
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20261002-1"></script>
-  <script src="src/app.js?v=20261003-3"></script>
+  <script src="src/app.js?v=20261003-4"></script>
 </body>
 </html>

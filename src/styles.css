@@ -6204,3 +6204,21 @@
       color: var(--accent);
       background: color-mix(in srgb, var(--accent) 12%, var(--panel));
     }
+
+    .ai-protection {
+      display: grid;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+
+    .ai-protection input[type="password"][hidden] {
+      display: none;
+    }
+
+    .ai-settings-actions {
+      display: flex;
+      gap: 8px;
+    }

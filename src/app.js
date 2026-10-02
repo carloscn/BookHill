@@ -3216,6 +3216,7 @@ const fallbackSentences = [
         $("sourceStatus").textContent = "当前句已有 Ai 语法分析，已使用缓存。";
         return;
       }
+      await ensureAiKeyUnlocked();
       const settings = mergedAiSettings();
       if (!settings.apiKey) {
         alert("请先在“设置”的“AI 接口”中填写并保存 API Key。");
@@ -3361,8 +3362,9 @@ const fallbackSentences = [
       state.speechSettings = { ...(saved("speech") || {}) };
       applyFontSettings(saved("fonts"), { persist: false });
       applyGrammarColors(saved("grammarColors"), { persist: false });
-      state.aiSettings = { ...(saved("ai") || {}), apiKey: String(userData.get("localSecrets", "aiApiKey", "global") || "") };
+      state.aiSettings = { ...(saved("ai") || {}), apiKey: "" };
       loadAiSettings();
+      restoreAiKey();
       loadPracticeSettings();
       document.querySelectorAll("[data-dictionary-auto-speak]").forEach((checkbox) => {
         checkbox.checked = dictionaryAutoSpeakEnabled();
@@ -3502,23 +3504,135 @@ const fallbackSentences = [
       return { ...aiDefaults(), ...state.aiSettings };
     }
 
+    // ---- AI API key at rest (src/secret-store.js). The localSecrets record (device only, never exported or synced)
+    // holds an AES-GCM box, never the key itself: { v: 1, mode: "device" | "passphrase", iv, data, salt?, iterations?,
+    // hint, origin }. The box is bound to the identity and the API origin. The decrypted key lives in memory only
+    // (state.aiSettings.apiKey); "session" keeps it there without storing anything.
+    const secretStore = window.langLSRWSecretStore;
+
+    function aiSecretContext(origin) {
+      return { user: userData.identity || "guest", origin };
+    }
+
+    function storedAiKeyBox() {
+      const value = userData.identity ? userData.get("localSecrets", "aiApiKey", "global") : null;
+      return value && typeof value === "object" && value.v === 1 ? value : null;
+    }
+
+    function renderAiKeyState(message = "") {
+      const box = storedAiKeyBox();
+      const inMemory = Boolean(state.aiSettings.apiKey);
+      const text = box
+        ? `已保存 Key ${box.hint || ""} · ${box.mode === "passphrase" ? (inMemory ? "已解锁" : "需要解锁密码") : "本机加密"}`
+        : inMemory ? "Key 只在这次打开页面期间有效（未保存）" : "还没有保存 API Key";
+      $("aiKeyState").textContent = message || text;
+      if (box) {
+        const radio = document.querySelector(`input[name="aiProtection"][value="${box.mode}"]`);
+        if (radio) radio.checked = true;
+      }
+      $("aiPassphraseInput").hidden = document.querySelector('input[name="aiProtection"]:checked')?.value !== "passphrase";
+    }
+
+    // Opens the stored box for the current identity. A plain-text key left by an older version is encrypted in place.
+    async function restoreAiKey() {
+      const identity = userData.identity;
+      const stored = identity ? userData.get("localSecrets", "aiApiKey", "global") : null;
+      try {
+        if (typeof stored === "string" && stored) {
+          state.aiSettings.apiKey = stored;
+          await sealAiKey(stored, "device");
+        } else if (stored?.v === 1 && stored.mode === "device") {
+          const key = await secretStore.decrypt(await secretStore.deviceKey(), stored, aiSecretContext(stored.origin));
+          if (identity === userData.identity) state.aiSettings.apiKey = key;
+        }
+      } catch (error) {
+        renderAiKeyState(`已保存的 API Key 无法使用：${error.message || error}`);
+        return;
+      }
+      renderAiKeyState();
+    }
+
+    async function sealAiKey(apiKey, mode, passphrase = "") {
+      const origin = secretStore.checkBaseUrl(mergedAiSettings().baseUrl).origin;
+      const context = aiSecretContext(origin);
+      const box = mode === "passphrase"
+        ? await secretStore.sealWithPassphrase(passphrase, apiKey, context)
+        : await secretStore.encrypt(await secretStore.deviceKey(), apiKey, context);
+      userData.put("localSecrets", "aiApiKey", { v: 1, mode, ...box, hint: secretStore.keyHint(apiKey), origin }, "global");
+    }
+
+    // Before an AI request: unlock a passphrase-protected key once per page.
+    async function ensureAiKeyUnlocked() {
+      if (state.aiSettings.apiKey) return true;
+      const box = storedAiKeyBox();
+      if (box?.mode !== "passphrase") return false;
+      const passphrase = prompt(`输入解锁密码，以使用已保存的 API Key（${box.hint || ""}）`);
+      if (!passphrase) return false;
+      try {
+        state.aiSettings.apiKey = await secretStore.openWithPassphrase(passphrase, box, aiSecretContext(box.origin));
+        renderAiKeyState();
+        return true;
+      } catch (error) {
+        alert(error.message || error);
+        return false;
+      }
+    }
+
     function loadAiSettings() {
       const settings = mergedAiSettings();
       $("aiBaseUrlInput").value = settings.baseUrl;
       $("aiModelInput").value = settings.model;
-      $("aiApiKeyInput").value = settings.apiKey;
+      $("aiApiKeyInput").value = "";
+      $("aiPassphraseInput").value = "";
+      renderAiKeyState();
     }
 
-    function saveAiSettings() {
-      const settings = {
-        baseUrl: $("aiBaseUrlInput").value.trim() || aiDefaults().baseUrl,
-        model: $("aiModelInput").value.trim() || aiDefaults().model,
-        apiKey: $("aiApiKeyInput").value.trim()
-      };
-      state.aiSettings = settings;
-      persistSetting("ai", { baseUrl: settings.baseUrl, model: settings.model });
-      if (userData.identity) userData.put("localSecrets", "aiApiKey", settings.apiKey, "global");
-      $("aiSettingsStatus").textContent = "AI 设置已保存。";
+    async function saveAiSettings() {
+      const checked = secretStore.checkBaseUrl($("aiBaseUrlInput").value.trim() || aiDefaults().baseUrl);
+      if (!checked.ok) {
+        $("aiSettingsStatus").textContent = checked.error;
+        return;
+      }
+      const mode = document.querySelector('input[name="aiProtection"]:checked')?.value || "device";
+      const typedKey = $("aiApiKeyInput").value.trim();
+      const previousBox = storedAiKeyBox();
+      const apiKey = typedKey || state.aiSettings.apiKey;
+      const passphrase = $("aiPassphraseInput").value;
+      const originChanged = previousBox && previousBox.origin !== checked.origin;
+      if (mode === "passphrase" && apiKey && (typedKey || previousBox?.mode !== "passphrase" || originChanged) && passphrase.length < 6) {
+        $("aiSettingsStatus").textContent = "请设置至少 6 位的解锁密码。";
+        return;
+      }
+      if (!apiKey && previousBox && (originChanged || previousBox.mode !== mode)) {
+        $("aiSettingsStatus").textContent = previousBox.mode === "passphrase"
+          ? "改接口地址或保护方式前，请先用一次 AI 功能解锁 Key，或重新填写 Key。"
+          : "请重新填写 API Key。";
+        return;
+      }
+      state.aiSettings = { baseUrl: checked.baseUrl, model: $("aiModelInput").value.trim() || aiDefaults().model, apiKey };
+      persistSetting("ai", { baseUrl: state.aiSettings.baseUrl, model: state.aiSettings.model });
+      try {
+        if (!userData.identity) {
+          // nothing to store without an identity
+        } else if (mode === "session") {
+          userData.remove("localSecrets", "aiApiKey", "global");
+        } else if (apiKey && (typedKey || !previousBox || previousBox.mode !== mode || originChanged)) {
+          await sealAiKey(apiKey, mode, passphrase);
+        }
+      } catch (error) {
+        $("aiSettingsStatus").textContent = `保存 API Key 失败：${error.message || error}`;
+        return;
+      }
+      loadAiSettings();
+      $("aiSettingsStatus").textContent = mode === "session" ? "AI 设置已保存；Key 只用到关闭页面为止。" : "AI 设置已保存，Key 已加密保存在本机。";
+    }
+
+    async function forgetAiKey() {
+      if (!(await showAppConfirm("删除这台设备上保存的 API Key 吗？", { title: "删除 API Key", okText: "删除" }))) return;
+      if (userData.identity) userData.remove("localSecrets", "aiApiKey", "global");
+      state.aiSettings.apiKey = "";
+      loadAiSettings();
+      $("aiSettingsStatus").textContent = "已删除 API Key。";
     }
 
     function formatBytes(bytes) {
@@ -9751,6 +9865,12 @@ ${orderNote}`;
     });
 
     $("saveAiSettingsBtn").addEventListener("click", saveAiSettings);
+    $("forgetAiKeyBtn").addEventListener("click", forgetAiKey);
+    document.querySelectorAll('input[name="aiProtection"]').forEach((radio) => {
+      radio.addEventListener("change", () => {
+        $("aiPassphraseInput").hidden = radio.value !== "passphrase" || !radio.checked;
+      });
+    });
     document.addEventListener("input", (event) => {
       if (event.target.matches?.("[data-word-review-input]")) updateWordReviewMask(event.target);
     });
