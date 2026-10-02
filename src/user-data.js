@@ -28,7 +28,11 @@
     grammarResult: { scope: "language", kind: "state" },
     customLibrary: { scope: "language", kind: "state" },
     // 我的词表: user word lists shown as 词库 categories ({ id, name, source, sheet, words: [[word, note?], ...] }).
-    wordList: { scope: "language", kind: "state" }
+    wordList: { scope: "language", kind: "state" },
+    // 课文库: one passage per key ({ id, title, body }). The language is the record scope.
+    passage: { scope: "language", kind: "state" },
+    // 读 page whiteboard, one note per passage (plain text). Key matches the passage id.
+    passageNote: { scope: "language", kind: "state" }
   };
 
   let db = null;

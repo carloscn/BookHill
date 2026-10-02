@@ -26,6 +26,11 @@ The user interface is in Simplified Chinese. Button names below are translated.
 - Every import opens a preview. You can create a new library or append to an existing one. Duplicates are detected regardless of case and spacing, and their translations can be merged, kept or replaced.
 - The app remembers your position in every library, and any library can be exported back to text.
 
+**Reading (读)**
+- A passage library (课文库) next to the sentence library and the vocabulary: each passage is a title plus a body, filed under English or Spanish.
+- The reading page loads one passage, shows it in large type split into sentences, and gives each sentence its own highlight colour. Click a sentence to hear it. Right-click a word to look it up.
+- A whiteboard beside the passage keeps free notes with that passage. Passages and notes are personal data, so a Google account syncs them to that user's Drive.
+
 **Vocabulary (词库)**
 - Offline dictionaries installed into the browser: ECDICT (English–Chinese, 770k entries) and Spanish Wiktionary with frequency ranks.
 - Built-in word lists include Oxford 3000, CET4/6, IELTS, TOEFL and GRE for English, and frequency tiers for Spanish.
@@ -109,6 +114,7 @@ src/
   app.js                    UI and practice flows
   user-data.js              Personal data store (IndexedDB), export/import documents
   library-import.js         Import parsing and de-duplication (pure, tested)
+  passage.js                Passage splitting for the reading page (pure, tested)
   library-store.js          Sentence libraries in IndexedDB
   google-drive.js           Google sign-in, Drive files, Picker, Sheets API
   cloud-sync.js             Drive sync rules (pure, tested)

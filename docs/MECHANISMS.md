@@ -49,11 +49,22 @@ langLSRW 有两种相互独立的身份模式：
 - 登录：Google Identity Services 令牌模式（`src/google-drive.js`），弹窗授权，令牌只在内存中、约一小时有效；刷新页面后需要点一次 `立即同步` 重新连接（Google 要求由点击触发）。登录时可以选择把游客 / 本机用户的句库和学习记录一起带入账号。
 - `langLSRW/langlsrw-userdata.json`：与备份导出相同的个人数据文档。同步时先下载、按记录合并（`userData.importDocument`，较新者胜出，墓碑同步删除），内容有变化时再上传（`cloudSync.sameDocument` 比较）。旧版 lang_srw 的 `langlsrw-data.json` 保持不动、不再读取。
 - `langLSRW/libraries/*.tsv`：每个句库一个文件，句库 id、语言、更新时间和来源表格放在文件的 `appProperties` 中；`cloudSync.planLibrarySync` 决定上传 / 下载 / 改名 / 删除，本机删除通过墓碑（`langLSRWLibraryTombstones:<身份>`）把 Drive 文件移到回收站。
-- 我的词表（`wordList` 记录）属于个人数据文档，随它同步。
+- 我的词表（`wordList` 记录）属于个人数据文档，随它同步。课文库（`passage`）和读页白板（`passageNote`）也在这份文档里，不另存文件。
 - 自动同步：个人数据变化后约 8 秒、导入或修改句库后约 0.5 秒（`scheduleCloudSync()` 保留最早的截止时间）；同步进行中再有变化会在结束后再同步一次。
 - 文档不包含词典、录音、其他身份的数据和 AI API 密钥。
 
 相关实现：`src/google-drive.js`、`src/cloud-sync.js`、`src/user-data.js`、`src/library-store.js` 和 `src/app.js` 的 `syncWithCloud()`。
+
+## 读（课文库）
+
+「读」页面载入一篇课文，大字按句显示。分句在 `src/passage.js`（`splitSentences`）：空行分段，句号、问号、感叹号和省略号断句；`Mr.`、`U.S.`、`e.g.`、小数点不断开。英语和西班牙语用同一套断句，查词和朗读仍走当前学习语言的分词与口音。
+
+- 课文库在页头，和句库、词库并列。导入是标题、正文、语言（英语 / 西班牙语）。语言决定记录存在哪个语言范围里；读页面的下拉框只列出当前学习语言的课文。也可以从 `.txt` 把正文填进表单。
+- 每句一种底色，六种循环（`highlightIndex`）。点一句朗读这一句（用当前语速和口音），再次点别的句就换一句。右键单词走和听力页相同的查词弹窗；中键朗读所点的单词。
+- 右侧白板是纯文本。已经载入课文时，笔记的键就是课文 id；还没有课文时记在 `scratch`。切换课文或学习语言前会先把当前白板写下去。
+- 上次载入的课文记在 `position` 的 `reading`。删除课文时，这篇课文的白板和这个位置一起删掉。
+
+相关实现：`src/passage.js`、`src/app.js` 的 `renderReading()` / `openPassageLibrary()`，个人数据见 `USER_DATA.md`。
 
 ### 正式发布方向
 

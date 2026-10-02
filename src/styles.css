@@ -6234,3 +6234,262 @@
     .dictionary-install-hint a {
       color: var(--accent);
     }
+
+    .read-layout {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 12px;
+      height: calc(100vh - 148px);
+      min-height: 420px;
+    }
+
+    .read-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .read-toolbar-label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .read-toolbar select {
+      min-width: min(280px, 100%);
+      max-width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      padding: 4px 8px;
+    }
+
+    .read-columns {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(220px, 0.7fr);
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .read-article,
+    .read-board {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow-card);
+    }
+
+    .read-article {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .read-title {
+      margin: 0;
+      padding: 16px 18px 0;
+      font-size: 22px;
+      line-height: 1.35;
+    }
+
+    .read-passage {
+      padding: 12px 18px 22px;
+      font-family: var(--font-english-content);
+      font-size: 26px;
+      line-height: 1.65;
+    }
+
+    .read-paragraph {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 18px;
+    }
+
+    .read-sentence {
+      margin: 0;
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      cursor: pointer;
+      overflow-wrap: anywhere;
+    }
+
+    .read-sentence:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .read-sentence.is-hl-0 { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); }
+    .read-sentence.is-hl-1 { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); }
+    .read-sentence.is-hl-2 { background: color-mix(in srgb, var(--bad) 14%, var(--surface)); }
+    .read-sentence.is-hl-3 { background: color-mix(in srgb, var(--good) 18%, var(--surface)); }
+    .read-sentence.is-hl-4 { background: color-mix(in srgb, var(--engine-border) 42%, var(--surface)); }
+    .read-sentence.is-hl-5 { background: color-mix(in srgb, var(--chip) 14%, var(--surface)); }
+
+    .read-sentence.is-current {
+      box-shadow: inset 0 0 0 2px var(--accent);
+    }
+
+    .read-empty {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .read-board {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 12px;
+      gap: 8px;
+    }
+
+    .read-board label {
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    #readWhiteboard {
+      flex: 1 1 auto;
+      width: 100%;
+      min-height: 0;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      line-height: 1.6;
+    }
+
+    .passage-dialog {
+      width: min(980px, 100%);
+    }
+
+    .passage-layout {
+      display: grid;
+      grid-template-columns: minmax(200px, 0.8fr) minmax(0, 1.2fr);
+      min-height: 0;
+    }
+
+    .passage-list-pane {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      padding: 12px;
+    }
+
+    .passage-list {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .passage-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .passage-item {
+      min-width: 0;
+      text-align: left;
+      display: grid;
+      gap: 2px;
+    }
+
+    .passage-item strong,
+    .passage-item span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .passage-item span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .passage-item.is-current {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    }
+
+    .passage-form {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto auto auto minmax(120px, 1fr) auto auto;
+      gap: 6px;
+      padding: 12px 14px 14px;
+      overflow: auto;
+    }
+
+    .passage-form label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .passage-form input,
+    .passage-form select,
+    .passage-form textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 10px;
+      font: inherit;
+    }
+
+    .passage-form textarea {
+      min-height: 160px;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .passage-form-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    @media (max-width: 760px) {
+      .read-columns,
+      .passage-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .passage-list-pane {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        max-height: 220px;
+      }
+
+      .read-passage {
+        font-size: 22px;
+      }
+
+      .read-layout {
+        height: auto;
+        min-height: 0;
+      }
+
+      .read-article {
+        overflow: visible;
+      }
+
+      #readWhiteboard {
+        min-height: 220px;
+        resize: vertical;
+      }
+    }
