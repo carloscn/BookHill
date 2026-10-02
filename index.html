@@ -9,7 +9,7 @@
   <meta name="google-api-key" content="AIzaSyBVHLOHo33UvlhmQPrVwcNmSlbOrUTFgeY">
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20261002-3">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-4">
 
 </head>
 <body data-theme="eye" data-active-page="listenPage">
@@ -383,8 +383,8 @@
         <div id="importPreview" class="library-sentence-list import-preview"></div>
         <fieldset id="importSheetOptions" class="import-options" hidden>
           <legend>表格的列</legend>
-          <label class="radio-row"><span>练习句子</span><select id="importTextColumn" aria-label="练习句子所在的列"></select></label>
-          <label class="radio-row"><span>翻译</span><select id="importTranslationColumn" aria-label="翻译所在的列"></select></label>
+          <label class="radio-row"><span id="importTextColumnLabel">练习句子</span><select id="importTextColumn" aria-label="练习内容所在的列"></select></label>
+          <label class="radio-row"><span id="importTranslationColumnLabel">翻译</span><select id="importTranslationColumn" aria-label="翻译或释义所在的列"></select></label>
           <label class="check-row">
             <input id="importHeaderToggle" type="checkbox">
             <span>第一行是表头（不导入）</span>
@@ -392,23 +392,23 @@
         </fieldset>
         <label id="importSwapRow" class="check-row">
           <input id="importSwapToggle" type="checkbox">
-          <span>对调两列：把「|」右边的内容作为练习句子</span>
+          <span id="importSwapLabel">对调两列：把「|」右边的内容作为练习句子</span>
         </label>
         <fieldset class="import-options">
           <legend>导入到</legend>
           <label class="radio-row">
             <input type="radio" name="importTarget" value="new" checked>
-            <span>新建句库</span>
+            <span id="importNewLabel">新建句库</span>
             <input id="importNameInput" type="text" maxlength="80" aria-label="新句库名称">
           </label>
           <label class="radio-row">
             <input type="radio" name="importTarget" value="append">
-            <span>追加到已有句库</span>
+            <span id="importAppendLabel">追加到已有句库</span>
             <select id="importAppendSelect" aria-label="追加到的句库"></select>
           </label>
         </fieldset>
         <fieldset id="importDuplicateOptions" class="import-options">
-          <legend>追加时遇到已有的句子（不区分大小写和空格）</legend>
+          <legend id="importDuplicateLegend">追加时遇到已有的句子（不区分大小写和空格）</legend>
           <label class="radio-row"><input type="radio" name="importDuplicates" value="merge" checked><span>合并翻译（推荐）</span></label>
           <label class="radio-row"><input type="radio" name="importDuplicates" value="keep"><span>保留原有翻译</span></label>
           <label class="radio-row"><input type="radio" name="importDuplicates" value="replace"><span>用新翻译覆盖</span></label>
@@ -662,6 +662,18 @@
               <button class="word-review-start" type="button" data-dictionary-study-session="test">测验 (0)</button>
             </div>
           </div>
+          <div class="word-list-actions" aria-label="我的词表">
+            <span class="word-list-actions-label">我的词表：</span>
+            <button id="wordListImportBtn" type="button" title="从 txt / tsv 导入词表：每行一个词，可以用「|」或 Tab 带上释义">＋ 导入文件</button>
+            <input id="wordListFileInput" type="file" accept=".txt,.tsv,text/plain,text/tab-separated-values" hidden>
+            <button id="wordListSheetBtn" type="button" title="从 Google 表格导入词表（需要 Google 登录）">从 Google 表格导入</button>
+            <span id="wordListManage" class="word-list-manage" hidden>
+              <button id="wordListSheetUpdateBtn" type="button" hidden title="重新读取来源表格，新词追加进来，释义有变化的会合并">从表格更新</button>
+              <button id="wordListRenameBtn" type="button">重命名</button>
+              <button id="wordListExportBtn" type="button" title="下载为「单词 | 释义」格式的 txt，可以直接重新导入">导出</button>
+              <button id="wordListDeleteBtn" type="button">删除</button>
+            </span>
+          </div>
           <div id="dictionaryLibraryCount" class="user-words-count">
             <input id="dictionaryLibrarySearchInput" type="search" autocomplete="off" placeholder="搜索单词" aria-label="搜索完整词库">
             <span id="dictionaryLibraryCountText">0 个单词</span>
@@ -873,12 +885,12 @@
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20261002-2"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261002-3"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20260928-5"></script>
-  <script src="src/app.js?v=20261002-4"></script>
+  <script src="src/user-data.js?v=20261002-1"></script>
+  <script src="src/app.js?v=20261002-5"></script>
 </body>
 </html>

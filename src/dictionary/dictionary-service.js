@@ -46,12 +46,21 @@
     constructor(options = {}) {
       this.packages = options.packages || DICTIONARY_PACKAGES;
       this.activeDictionaryId = options.activeDictionaryId || "ecdict";
-      this.workerUrl = options.workerUrl || "src/dictionary/dictionary-worker.js?v=20261002-2";
+      this.workerUrl = options.workerUrl || "src/dictionary/dictionary-worker.js?v=20261002-3";
       this.worker = null;
       this.sequence = 0;
       this.pending = new Map();
       this.progressListeners = new Set();
       this.manifests = new Map();
+      // Set by the app: category "wordlist:<id>" -> that word list's words (我的词表).
+      this.wordListResolver = null;
+    }
+
+    resolveOptions(options = {}) {
+      const category = String(options.category || "");
+      if (!category.startsWith("wordlist:")) return options;
+      const words = this.wordListResolver ? this.wordListResolver(category) : [];
+      return { ...options, wordList: Array.isArray(words) ? words : [] };
     }
 
     ensureWorker() {
@@ -189,11 +198,11 @@
     }
 
     async list(options = {}, id = this.activeDictionaryId) {
-      return this.call("list", { dictionary: this.workerDictionary(id), frequency: await this.frequencyOptions(id), options });
+      return this.call("list", { dictionary: this.workerDictionary(id), frequency: await this.frequencyOptions(id), options: this.resolveOptions(options) });
     }
 
     async studyList(options = {}, id = this.activeDictionaryId) {
-      return this.call("studyList", { dictionary: this.workerDictionary(id), frequency: await this.frequencyOptions(id), options });
+      return this.call("studyList", { dictionary: this.workerDictionary(id), frequency: await this.frequencyOptions(id), options: this.resolveOptions(options) });
     }
 
     onProgress(listener) {

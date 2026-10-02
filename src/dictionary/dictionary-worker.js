@@ -67,6 +67,15 @@ const LIST_PROFILES = {
   }
 };
 
+// A user word list (我的词表) restricts a word list to the given words, matched case-insensitively through the
+// word COLLATE NOCASE index. Returns null when the request is not for a word list.
+function wordListFilter(options) {
+  const words = Array.isArray(options?.wordList) ? options.wordList : null;
+  if (!words) return null;
+  const unique = [...new Set(words.map((word) => String(word || "").trim()).filter(Boolean))];
+  return { where: "stardict.word COLLATE NOCASE IN (SELECT value FROM json_each(?))", bind: JSON.stringify(unique) };
+}
+
 function listProfile(dictionary) {
   return LIST_PROFILES[dictionary.languageId] || LIST_PROFILES.en;
 }
@@ -359,7 +368,8 @@ async function list(payload = {}) {
   await ensureFrequency(payload, dictionary);
   const profile = listProfile(dictionary);
   const { entryType = "words", category = "all", sort = "alphabetical", query = "", page = 1, pageSize = 100, excludeWords = [] } = payload.options || payload;
-  const categoryWhere = profile.categories[category] || profile.categories.all;
+  const wordList = wordListFilter(payload.options || payload);
+  const categoryWhere = wordList ? wordList.where : (profile.categories[category] || profile.categories.all);
   const letter = profile.firstLetter;
   const typeWhere = entryType === "suffixes"
     ? "stardict.word LIKE '-%'"
@@ -377,8 +387,8 @@ async function list(payload = {}) {
   const excludeWhere = normalizedExcludeWords.length
     ? `lower(stardict.word) NOT IN (${normalizedExcludeWords.map(() => "?").join(",")})`
     : "1=1";
-  const bindings = [...(normalizedQuery ? [`%${escapedQuery}%`] : []), ...normalizedExcludeWords];
-  const source = listSource(dictionary, profile, profile.categories[category] ? category : "all", sort);
+  const bindings = [...(wordList ? [wordList.bind] : []), ...(normalizedQuery ? [`%${escapedQuery}%`] : []), ...normalizedExcludeWords];
+  const source = listSource(dictionary, profile, !wordList && profile.categories[category] ? category : "all", sort);
   const where = `(${typeWhere}) AND (${categoryWhere}) AND (${searchWhere}) AND (${excludeWhere})`;
   const normalizedPageSize = Math.max(20, Math.min(Number(pageSize) || 100, 200));
   const countSql = `SELECT count(*) FROM ${source} WHERE ${where}`;
@@ -397,7 +407,8 @@ async function studyList(payload = {}) {
   await ensureFrequency(payload, dictionary);
   const profile = listProfile(dictionary);
   const { category = "all", sort = "alphabetical", excludeWords = [] } = payload.options || payload;
-  const categoryWhere = profile.categories[category];
+  const wordList = wordListFilter(payload.options || payload);
+  const categoryWhere = wordList ? wordList.where : profile.categories[category];
   if (!categoryWhere) throw new Error("请选择具体词表");
   const normalizedExcludeWords = [...new Set((Array.isArray(excludeWords) ? excludeWords : [])
     .map((word) => String(word || "").trim().toLowerCase())
@@ -405,10 +416,10 @@ async function studyList(payload = {}) {
   const excludeWhere = normalizedExcludeWords.length
     ? `AND lower(stardict.word) NOT IN (${normalizedExcludeWords.map(() => "?").join(",")})`
     : "";
-  const source = listSource(dictionary, profile, category, sort);
+  const source = listSource(dictionary, profile, wordList ? "all" : category, sort);
   return database.selectArrays(
     `SELECT stardict.id, ${listWordColumn(source)}, collins FROM ${source} WHERE stardict.word GLOB '${profile.firstLetter}*' AND instr(trim(stardict.word), ' ') = 0 AND (${categoryWhere}) ${excludeWhere} ORDER BY ${profile.orderBy[sort] || profile.orderBy.alphabetical}`,
-    normalizedExcludeWords
+    [...(wordList ? [wordList.bind] : []), ...normalizedExcludeWords]
   ).map(([id, word, collins]) => ({ id, word, collins: Number(collins) || 0 }));
 }
 

@@ -6045,3 +6045,31 @@
       max-width: 260px;
       text-align: center;
     }
+
+    /* 我的词表 (词库) */
+    #importModal {
+      z-index: 65;
+    }
+
+    .word-list-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin: 6px 0;
+      font-size: 13px;
+    }
+
+    .word-list-actions-label {
+      color: var(--muted);
+    }
+
+    .word-list-manage {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .word-list-manage[hidden] {
+      display: none;
+    }
