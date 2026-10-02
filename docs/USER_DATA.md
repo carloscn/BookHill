@@ -19,7 +19,7 @@
 | 身份 | 如何进入 | 身份标识 | 说明 |
 |---|---|---|---|
 | 本机用户 | 登录框输入名字（无密码） | `local:<用户名>` | 只在当前浏览器区分数据，不是账号；最多记住 8 个（`langLSRWKnownUsers`） |
-| Google 云账号 | `Google 登录`（Supabase Auth） | `cloud:<Supabase 用户 id>` | 项目已连接 Supabase（公开配置在 `src/cloud-config.js`，线上由 Vercel 环境变量注入）；线上 Google 登录已验证，跨设备同步尚未做双浏览器 / 双设备验证 |
+| Google 云账号 | `使用 Google 登录`（Google Identity Services） | `cloud:<Google sub>` | 数据同步到用户自己 Google Drive 的 `langLSRW/` 文件夹，见第 8 节 |
 | 未登录 | 两者都没有 | `guest` | 与其他身份一样保存数据 |
 
 - 启动时、本机用户登录、云账号登录、退出、删除用户后，都会重新打开对应身份的数据（`openUserData()`），切换到该身份的学习语言、应用其设置，再恢复该语言的最后位置。
@@ -54,6 +54,7 @@
 | 语言 | `grammarResult` | 状态 | 统一格式的句子原文 | AI 语法分析结果 `{ sentence, framework, grammar, grammarRaw（与 grammar 不同时才存）, savedAt }`；结果内容自带分析规范和数据格式版本 |
 | 语言 | `sentenceProgress` | 状态 | — | 预留给背句子（`SENTENCE_REVIEW.md`），尚未使用 |
 | 语言 | `customLibrary` | 状态 | — | 预留给自定义句库，暂不实现 |
+| 语言 | `wordList` | 状态 | 词表 id | 我的词表：`{ id, name, source, sheet, words: [[单词, 释义?], ...] }`，在 `词库` 中作为分类显示（导入顺序保留） |
 | 语言 | `practiceEvent` | 事件 | 时间短码 | **隐藏**：每答一句一条（句子引用、练习方式、准确率、流利度、错误数、速度、时间、写错的位置） |
 | 语言 | `reviewEvent` | 事件 | 时间短码 | **隐藏**：每答一题单词一条 `[单词, 练习方式, 答对 1 / 答错 0, 用了提示, 自由练习, 时间（秒）]` |
 
@@ -160,12 +161,13 @@
 
 删除该身份在数据库中的全部记录（收藏、背词进度、设置、位置、语法分析等），从用户列表移除，然后切换到未登录身份。
 
-## 8. 云同步（Supabase）
+## 8. 云同步（Google Drive）
 
-- 表：`supabase/schema.sql` 的 `user_sync_state`，每个账号一行，`payload` 为整份 JSON；已启用行级安全（RLS），用户只能读写自己的行。前端只用 Supabase URL 和 publishable（anon）key。
-- 上传：`collectCloudPayload()` 就是与导出相同的个人数据文件。自动同步 `AUTO_CLOUD_SYNC_ENABLED = false`，目前只能手动点“同步到云端”，整行覆盖云端。
-- 登录：`activateCloudUser()` 打开 `cloud:<id>` 身份，读取云端文件并按导入的规则合并（较新的记录保留），再恢复最后位置。重构前的旧格式云端数据（`schemaVersion: 1`）直接忽略。
+- 位置：用户自己 Google Drive 的 `langLSRW/langlsrw-userdata.json`（个人数据文档，与导出格式相同）和 `langLSRW/libraries/*.tsv`（句库）。服务器不保存任何用户数据。
+- 同步（`syncWithCloud()`）：先同步句库，再下载文档按记录合并（较新的记录保留，删除以墓碑传递），本机有更新时上传整份文档。修改后自动同步；刷新页面后需点 `立即同步` 重新连接 Google。
+- 登录：`activateCloudUser()` 打开 `cloud:<sub>` 身份；从游客 / 本机用户登录时可选择把其句库和记录带入。
 - 退出：切换到未登录身份，回到登录框；本机数据库中的云账号记录保留。
+- 不同步：`localSecrets`（AI API Key，本机加密保存，见 README）、词典、录音、翻译缓存。
 
 ## 9. 问题清单与处理结果
 
@@ -189,9 +191,9 @@
 
 ## 10. 以后
 
-- **云同步**：改为只上传、下载上次同步后改过的记录，合并规则与导入相同；上传前比较云端修改时间，避免覆盖其他设备较新的记录。Supabase 表可从整份 JSON 过渡到按记录保存。自动同步保持关闭，直到完成冲突处理和离线恢复。
+- **云同步**：文档较大时改为增量同步（只传上次同步后改过的记录）；上传前比较 Drive 文件版本，避免两台设备同时写入时覆盖对方。
 - **导入**：增加“完全替换”选项。
 - **失效提示**：收藏页显示因句库更新而失效的收藏句数量。
-- **自定义句库**：以 `customLibrary` 保存导入的文章，刷新后仍在，随导出和同步。
+- **句库**：句库本身保存在 IndexedDB（`src/library-store.js`）并单独同步为 Drive 中的 TSV 文件，不放进个人数据文档；`customLibrary` 仍预留。
 - **作答记录**：开发学习统计、复习池或背句子时，恢复 `practiceEvent`、`reviewEvent`。
 - **登录与账号**：本机用户保持“无密码、仅本机”，界面写明数据只在当前浏览器；对外开放前，AI 调用改走后端代理，不在浏览器保存真实的服务商 Key，并增加用量限制；需要时再考虑云账号数据导出与注销、本机用户数据上传到云账号。

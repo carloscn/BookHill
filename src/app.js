@@ -35,12 +35,9 @@ const fallbackSentences = [
       togglePractice: "Alt+R"
     };
 
-    const themes = [
-      { id: "eye", label: "护眼" },
-      { id: "light", label: "白天" },
-      { id: "gray", label: "深灰" },
-      { id: "black", label: "黑夜" }
-    ];
+    // Theme = { mode: "system" | "light" | "dark", palette } — the nav.mltz.tech model (see index.html's boot script).
+    const palettes = ["default", "github", "reddit", "twitter", "anki"];
+    const colorSchemeQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
 
     const englishFontPresets = {
       default: '"Segoe UI", Arial, sans-serif',
@@ -163,6 +160,27 @@ const fallbackSentences = [
       return "";
     }
 
+    function readBootTheme() {
+      try {
+        return JSON.parse(localStorage.getItem("langLSRWBootTheme") || "null");
+      } catch {
+        return null;
+      }
+    }
+
+    // Accepts the current { mode, palette } value and BookHill's old theme names (护眼 eye / 白天 light / 深灰 gray /
+    // 黑夜 black), which become light/dark on the default palette; 护眼 follows the system.
+    function normalizeTheme(theme) {
+      if (typeof theme === "string") {
+        const mode = { light: "light", gray: "dark", black: "dark", dark: "dark" }[theme] || "system";
+        return { mode, palette: "default" };
+      }
+      return {
+        mode: ["light", "dark"].includes(theme?.mode) ? theme.mode : "system",
+        palette: palettes.includes(theme?.palette) ? theme.palette : "default"
+      };
+    }
+
     const state = {
       sentences: normalizeSentenceList(fallbackSentences),
       libraries: [], // the current identity's own libraries for the current learning language
@@ -200,12 +218,14 @@ const fallbackSentences = [
       fontSettings: fontDefaults(),
       grammarColors: grammarColorDefaults(),
       // The theme starts from the browser's cache of the last shown theme (see applyTheme()).
-      theme: document.body.dataset.theme || "eye",
+      theme: normalizeTheme(readBootTheme()),
       activePage: loadActiveLearningPage(),
       // The learning language is a per-identity setting, applied once the identity's data opens; English until then.
       learningLanguageId: "en",
       currentLibraryLabel: "示例句库",
       grammarLoading: false,
+      grammarSource: "ai", // "ai" | "syntax": which analysis the grammar panel shows
+      syntaxLoading: false,
       grammarVisible: false,
       translationEditing: false,
       translationDraft: "",
@@ -1753,7 +1773,44 @@ const fallbackSentences = [
       renderWordListActions();
     }
 
+    // Word position in a list (lower-cased word -> index), for the 「导入顺序」 sort of favourites / 测验 filters.
+    function wordListOrder(category) {
+      const list = wordList(wordListId(category));
+      const order = new Map();
+      (list?.words || []).forEach(([word], index) => {
+        const key = String(word).trim().toLowerCase();
+        if (!order.has(key)) order.set(key, index);
+      });
+      return order;
+    }
+
+    // 「导入顺序」 exists only for word lists, and is what a word list opens with; leaving a word list drops it.
+    function syncWordListSortOption() {
+      const select = $("dictionarySortSelect");
+      const isList = Boolean(wordListId($("dictionaryCategorySelect").value));
+      let option = select.querySelector('option[value="imported"]');
+      if (isList && !option) {
+        option = document.createElement("option");
+        option.value = "imported";
+        option.textContent = "导入顺序";
+        select.prepend(option);
+      }
+      if (isList && state.dictionarySortBeforeList === undefined) {
+        state.dictionarySortBeforeList = select.value;
+        select.value = "imported";
+      }
+      if (!isList) {
+        if (option) option.remove();
+        if (state.dictionarySortBeforeList !== undefined) {
+          if ([...select.options].some((item) => item.value === state.dictionarySortBeforeList)) select.value = state.dictionarySortBeforeList;
+          state.dictionarySortBeforeList = undefined;
+        }
+        if (!select.value && select.options.length) select.value = select.options[0].value;
+      }
+    }
+
     function renderWordListActions() {
+      syncWordListSortOption();
       const list = wordList(wordListId($("dictionaryCategorySelect").value));
       $("wordListManage").hidden = !list;
       $("wordListSheetUpdateBtn").hidden = !list?.sheet;
@@ -2864,12 +2921,86 @@ const fallbackSentences = [
       return state.grammarLoading && state.sentences === state.grammarLoadingSentences && state.index === state.grammarLoadingIndex;
     }
 
+    // ---- Syntax parser (free, instant; services/parser + src/syntax-tree.js). Results are cached in memory per
+    // language + sentence and never mixed with the AI grammar cache (which is part of the synced personal data).
+    const syntaxTree = window.langLSRWSyntaxTree;
+    const syntaxCache = new Map();
+    const syntaxLanguages = new Set(["en", "es"]);
+
+    function syntaxParserUrl() {
+      // Local development can point at a local container: localStorage.langLSRWParserUrl = "http://127.0.0.1:18300/api/parse"
+      let override = "";
+      try {
+        override = localStorage.getItem("langLSRWParserUrl") || "";
+      } catch {}
+      if (override) return override;
+      const configured = document.querySelector('meta[name="syntax-parser-url"]')?.content || "/api/parse";
+      // The local static server has no /api: use production (it allows localhost via CORS).
+      if (configured.startsWith("/") && ["localhost", "127.0.0.1"].includes(location.hostname)) {
+        return `https://lang.mltz.tech${configured}`;
+      }
+      return configured;
+    }
+
+    function syntaxKey(sentence = currentSentence()) {
+      return `${state.learningLanguageId}\n${sentence}`;
+    }
+
+    function displayedGrammar() {
+      return state.grammarSource === "syntax" ? (syntaxCache.get(syntaxKey()) || "") : currentGrammar();
+    }
+
+    async function analyzeCurrentSyntax() {
+      const sentence = currentSentence();
+      const language = state.learningLanguageId;
+      if (!sentence || state.syntaxLoading) return;
+      if (!syntaxLanguages.has(language)) {
+        alert("成分分析目前支持英语和西班牙语。");
+        return;
+      }
+      // Clicking again while it is shown hides it.
+      if (state.grammarVisible && state.grammarSource === "syntax") {
+        state.grammarVisible = false;
+        renderTarget();
+        return;
+      }
+      state.grammarSource = "syntax";
+      if (!syntaxCache.has(syntaxKey())) {
+        state.syntaxLoading = true;
+        state.grammarVisible = true;
+        renderTarget();
+        try {
+          const response = await fetch(syntaxParserUrl(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: sentence.slice(0, 500), lang: language })
+          });
+          if (response.status === 429) throw new Error("请求太频繁了，请稍等几秒再试。");
+          if (response.status === 422 || response.status === 413) throw new Error("这句话太长（最多 500 个字符）或语言不受支持。");
+          if (!response.ok) throw new Error(`句法分析服务暂时不可用（HTTP ${response.status}）。`);
+          const tree = syntaxTree.build(await response.json());
+          syntaxCache.set(`${language}\n${sentence}`, JSON.stringify(tree));
+        } catch (error) {
+          state.grammarVisible = false;
+          alert(error instanceof TypeError ? "连不上句法分析服务，请检查网络后再试。" : (error.message || error));
+        } finally {
+          state.syntaxLoading = false;
+        }
+      }
+      if (currentSentence() !== sentence) return; // the learner moved on meanwhile
+      state.grammarVisible = syntaxCache.has(syntaxKey());
+      renderTarget();
+    }
+
     function renderGrammarAnalysis() {
       if (isAnalysingCurrentSentence()) {
         return '<div class="grammar-panel is-loading">正在分析语法...</div>';
       }
+      if (state.syntaxLoading && state.grammarSource === "syntax") {
+        return '<div class="grammar-panel is-loading">正在分析句子成分...</div>';
+      }
       if (!state.grammarVisible) return "";
-      const grammar = currentGrammar();
+      const grammar = displayedGrammar();
       if (!grammar) return '<div class="grammar-panel grammar-visual"><div class="grammar-toolbar"><div class="grammar-pattern"><span>句子成分</span></div></div><div class="grammar-empty">当前体系暂无分析</div></div>';
       const parsed = parseGrammarAnalysis(grammar);
       if (!parsed) return `<div class="grammar-panel">${escapeHtml(grammar).replace(/\n/g, "<br>")}</div>`;
@@ -2885,7 +3016,9 @@ const fallbackSentences = [
         .replace(/）/g, ")")
         .replace(/\s*\+\s*/g, " + ");
       const provenance = grammarAnalysisProvenance(parsed);
-      const analysisLabel = `句子成分${provenance.legacy ? " · 旧版" : ""}${parsed.status === "partial" ? " · 部分分析" : ""}`;
+      const bySyntax = parsed.convention === "syntax-parser/1";
+      if (bySyntax) provenance.label = `句法分析器自动生成（${parsed.source || "spaCy"}），可能有误；需要讲解请用「Ai语法分析」`;
+      const analysisLabel = `句子成分${bySyntax ? " · 自动分析" : ""}${provenance.legacy && !bySyntax ? " · 旧版" : ""}${parsed.status === "partial" ? " · 部分分析" : ""}`;
       const patternHtml = pattern
         ? `<div class="grammar-pattern"><span title="${escapeHtml(provenance.label)}">${analysisLabel}</span><span aria-hidden="true">·</span><strong>${escapeHtml(pattern)}</strong></div>`
         : `<div class="grammar-pattern"><span title="${escapeHtml(provenance.label)}">${analysisLabel}</span></div>`;
@@ -3073,6 +3206,7 @@ const fallbackSentences = [
 
     async function analyzeCurrentGrammar({ force = false } = {}) {
       if (state.grammarLoading || !currentLearningLanguage().grammarAnalysisEnabled) return;
+      state.grammarSource = "ai";
       const sentence = currentSentence();
       if (!sentence) return;
       const cachedGrammar = currentGrammar();
@@ -3082,6 +3216,7 @@ const fallbackSentences = [
         $("sourceStatus").textContent = "当前句已有 Ai 语法分析，已使用缓存。";
         return;
       }
+      await ensureAiKeyUnlocked();
       const settings = mergedAiSettings();
       if (!settings.apiKey) {
         alert("请先在“设置”的“AI 接口”中填写并保存 API Key。");
@@ -3193,7 +3328,7 @@ const fallbackSentences = [
     // What a new identity starts with.
     function defaultSettingValue(name) {
       return {
-        theme: "eye",
+        theme: { mode: "system", palette: "default" },
         shortcuts: { ...defaultShortcuts },
         speech: {},
         fonts: fontDefaults(),
@@ -3227,8 +3362,9 @@ const fallbackSentences = [
       state.speechSettings = { ...(saved("speech") || {}) };
       applyFontSettings(saved("fonts"), { persist: false });
       applyGrammarColors(saved("grammarColors"), { persist: false });
-      state.aiSettings = { ...(saved("ai") || {}), apiKey: String(userData.get("localSecrets", "aiApiKey", "global") || "") };
+      state.aiSettings = { ...(saved("ai") || {}), apiKey: "" };
       loadAiSettings();
+      restoreAiKey();
       loadPracticeSettings();
       document.querySelectorAll("[data-dictionary-auto-speak]").forEach((checkbox) => {
         checkbox.checked = dictionaryAutoSpeakEnabled();
@@ -3368,23 +3504,135 @@ const fallbackSentences = [
       return { ...aiDefaults(), ...state.aiSettings };
     }
 
+    // ---- AI API key at rest (src/secret-store.js). The localSecrets record (device only, never exported or synced)
+    // holds an AES-GCM box, never the key itself: { v: 1, mode: "device" | "passphrase", iv, data, salt?, iterations?,
+    // hint, origin }. The box is bound to the identity and the API origin. The decrypted key lives in memory only
+    // (state.aiSettings.apiKey); "session" keeps it there without storing anything.
+    const secretStore = window.langLSRWSecretStore;
+
+    function aiSecretContext(origin) {
+      return { user: userData.identity || "guest", origin };
+    }
+
+    function storedAiKeyBox() {
+      const value = userData.identity ? userData.get("localSecrets", "aiApiKey", "global") : null;
+      return value && typeof value === "object" && value.v === 1 ? value : null;
+    }
+
+    function renderAiKeyState(message = "") {
+      const box = storedAiKeyBox();
+      const inMemory = Boolean(state.aiSettings.apiKey);
+      const text = box
+        ? `已保存 Key ${box.hint || ""} · ${box.mode === "passphrase" ? (inMemory ? "已解锁" : "需要解锁密码") : "本机加密"}`
+        : inMemory ? "Key 只在这次打开页面期间有效（未保存）" : "还没有保存 API Key";
+      $("aiKeyState").textContent = message || text;
+      if (box) {
+        const radio = document.querySelector(`input[name="aiProtection"][value="${box.mode}"]`);
+        if (radio) radio.checked = true;
+      }
+      $("aiPassphraseInput").hidden = document.querySelector('input[name="aiProtection"]:checked')?.value !== "passphrase";
+    }
+
+    // Opens the stored box for the current identity. A plain-text key left by an older version is encrypted in place.
+    async function restoreAiKey() {
+      const identity = userData.identity;
+      const stored = identity ? userData.get("localSecrets", "aiApiKey", "global") : null;
+      try {
+        if (typeof stored === "string" && stored) {
+          state.aiSettings.apiKey = stored;
+          await sealAiKey(stored, "device");
+        } else if (stored?.v === 1 && stored.mode === "device") {
+          const key = await secretStore.decrypt(await secretStore.deviceKey(), stored, aiSecretContext(stored.origin));
+          if (identity === userData.identity) state.aiSettings.apiKey = key;
+        }
+      } catch (error) {
+        renderAiKeyState(`已保存的 API Key 无法使用：${error.message || error}`);
+        return;
+      }
+      renderAiKeyState();
+    }
+
+    async function sealAiKey(apiKey, mode, passphrase = "") {
+      const origin = secretStore.checkBaseUrl(mergedAiSettings().baseUrl).origin;
+      const context = aiSecretContext(origin);
+      const box = mode === "passphrase"
+        ? await secretStore.sealWithPassphrase(passphrase, apiKey, context)
+        : await secretStore.encrypt(await secretStore.deviceKey(), apiKey, context);
+      userData.put("localSecrets", "aiApiKey", { v: 1, mode, ...box, hint: secretStore.keyHint(apiKey), origin }, "global");
+    }
+
+    // Before an AI request: unlock a passphrase-protected key once per page.
+    async function ensureAiKeyUnlocked() {
+      if (state.aiSettings.apiKey) return true;
+      const box = storedAiKeyBox();
+      if (box?.mode !== "passphrase") return false;
+      const passphrase = prompt(`输入解锁密码，以使用已保存的 API Key（${box.hint || ""}）`);
+      if (!passphrase) return false;
+      try {
+        state.aiSettings.apiKey = await secretStore.openWithPassphrase(passphrase, box, aiSecretContext(box.origin));
+        renderAiKeyState();
+        return true;
+      } catch (error) {
+        alert(error.message || error);
+        return false;
+      }
+    }
+
     function loadAiSettings() {
       const settings = mergedAiSettings();
       $("aiBaseUrlInput").value = settings.baseUrl;
       $("aiModelInput").value = settings.model;
-      $("aiApiKeyInput").value = settings.apiKey;
+      $("aiApiKeyInput").value = "";
+      $("aiPassphraseInput").value = "";
+      renderAiKeyState();
     }
 
-    function saveAiSettings() {
-      const settings = {
-        baseUrl: $("aiBaseUrlInput").value.trim() || aiDefaults().baseUrl,
-        model: $("aiModelInput").value.trim() || aiDefaults().model,
-        apiKey: $("aiApiKeyInput").value.trim()
-      };
-      state.aiSettings = settings;
-      persistSetting("ai", { baseUrl: settings.baseUrl, model: settings.model });
-      if (userData.identity) userData.put("localSecrets", "aiApiKey", settings.apiKey, "global");
-      $("aiSettingsStatus").textContent = "AI 设置已保存。";
+    async function saveAiSettings() {
+      const checked = secretStore.checkBaseUrl($("aiBaseUrlInput").value.trim() || aiDefaults().baseUrl);
+      if (!checked.ok) {
+        $("aiSettingsStatus").textContent = checked.error;
+        return;
+      }
+      const mode = document.querySelector('input[name="aiProtection"]:checked')?.value || "device";
+      const typedKey = $("aiApiKeyInput").value.trim();
+      const previousBox = storedAiKeyBox();
+      const apiKey = typedKey || state.aiSettings.apiKey;
+      const passphrase = $("aiPassphraseInput").value;
+      const originChanged = previousBox && previousBox.origin !== checked.origin;
+      if (mode === "passphrase" && apiKey && (typedKey || previousBox?.mode !== "passphrase" || originChanged) && passphrase.length < 6) {
+        $("aiSettingsStatus").textContent = "请设置至少 6 位的解锁密码。";
+        return;
+      }
+      if (!apiKey && previousBox && (originChanged || previousBox.mode !== mode)) {
+        $("aiSettingsStatus").textContent = previousBox.mode === "passphrase"
+          ? "改接口地址或保护方式前，请先用一次 AI 功能解锁 Key，或重新填写 Key。"
+          : "请重新填写 API Key。";
+        return;
+      }
+      state.aiSettings = { baseUrl: checked.baseUrl, model: $("aiModelInput").value.trim() || aiDefaults().model, apiKey };
+      persistSetting("ai", { baseUrl: state.aiSettings.baseUrl, model: state.aiSettings.model });
+      try {
+        if (!userData.identity) {
+          // nothing to store without an identity
+        } else if (mode === "session") {
+          userData.remove("localSecrets", "aiApiKey", "global");
+        } else if (apiKey && (typedKey || !previousBox || previousBox.mode !== mode || originChanged)) {
+          await sealAiKey(apiKey, mode, passphrase);
+        }
+      } catch (error) {
+        $("aiSettingsStatus").textContent = `保存 API Key 失败：${error.message || error}`;
+        return;
+      }
+      loadAiSettings();
+      $("aiSettingsStatus").textContent = mode === "session" ? "AI 设置已保存；Key 只用到关闭页面为止。" : "AI 设置已保存，Key 已加密保存在本机。";
+    }
+
+    async function forgetAiKey() {
+      if (!(await showAppConfirm("删除这台设备上保存的 API Key 吗？", { title: "删除 API Key", okText: "删除" }))) return;
+      if (userData.identity) userData.remove("localSecrets", "aiApiKey", "global");
+      state.aiSettings.apiKey = "";
+      loadAiSettings();
+      $("aiSettingsStatus").textContent = "已删除 API Key。";
     }
 
     function formatBytes(bytes) {
@@ -3814,26 +4062,31 @@ const fallbackSentences = [
     }
 
     function applyTheme(theme, { persist = true } = {}) {
-      const themeMap = { dark: "black" };
-      const nextTheme = themeMap[theme] || theme;
-      state.theme = themes.some((item) => item.id === nextTheme) ? nextTheme : "eye";
-      document.body.dataset.theme = state.theme;
+      state.theme = normalizeTheme(theme);
+      const mode = state.theme.mode === "system" ? (colorSchemeQuery?.matches ? "dark" : "light") : state.theme.mode;
+      document.documentElement.dataset.theme = mode;
+      document.documentElement.dataset.palette = state.theme.palette;
       // Browser cache of the last shown theme, read by index.html before the page renders so opening the page does
       // not flash another background; the identity's theme setting stays authoritative.
       try {
-        localStorage.setItem("langLSRWBootTheme", state.theme);
+        localStorage.setItem("langLSRWBootTheme", JSON.stringify(state.theme));
       } catch {
         /* ignore storage errors */
       }
-      const current = themes.find((item) => item.id === state.theme);
-      $("themeToggleBtn").textContent = current.label;
-      $("themeToggleBtn").title = `背景：${current.label}`;
+      $("themeToggleBtn").textContent = mode === "dark" ? "浅色" : "深色";
+      $("themeToggleBtn").title = `${mode === "dark" ? "切换到浅色" : "切换到深色"}${state.theme.mode === "system" ? "（现在跟随系统）" : ""}`;
+      if ($("paletteSelect").value !== state.theme.palette) $("paletteSelect").value = state.theme.palette;
       if (persist) persistSetting("theme", state.theme);
     }
 
+    // An explicit click fixes light/dark; until then the page follows the system setting.
     function toggleTheme() {
-      const currentIndex = Math.max(0, themes.findIndex((item) => item.id === state.theme));
-      applyTheme(themes[(currentIndex + 1) % themes.length].id);
+      const dark = document.documentElement.dataset.theme === "dark";
+      applyTheme({ ...state.theme, mode: dark ? "light" : "dark" });
+    }
+
+    function applyPalette(palette) {
+      applyTheme({ ...state.theme, palette });
     }
 
     function applyFontSettings(settings, { persist = true } = {}) {
@@ -4968,6 +5221,23 @@ ${orderNote}`;
       return popover;
     }
 
+    // Word cards need the learning language's dictionary installed in this browser (dictionaries are not served by
+    // the site). Instead of a dead end, offer the download and a shortcut to 设置 → 本地词典.
+    function dictionaryInstallHint(dictionaryName, dictionaryId = currentDictionaryId()) {
+      const downloadUrl = window.langLSRWDictionary?.downloadUrl?.(dictionaryId) || "";
+      return `${escapeHtml(dictionaryName)}还没有安装到这个浏览器，所以查不到释义。安装一次即可离线查词：`
+        + `<div class="dictionary-install-hint">`
+        + (downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download>① 下载词典文件（约 70 MB）</a>` : "")
+        + `<button type="button" data-open-dictionary-settings>② 打开「本地词典」从文件安装</button></div>`;
+    }
+
+    function openDictionarySettings() {
+      closeDictionaryLookup();
+      closeEnglishLookup();
+      openSettings();
+      selectSettingsTab("dictionary");
+    }
+
     function renderEnglishLookupMessage(word, message, popover = $("englishLookupPopover")) {
       popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><div class="dictionary-lookup-actions"><span class="english-lookup-label">英语词典</span><button type="button" data-dictionary-close aria-label="关闭" title="关闭英语词典查询">×</button></div></div><div class="dictionary-lookup-empty">${message}</div>`;
     }
@@ -5001,7 +5271,7 @@ ${orderNote}`;
       } catch (error) {
         if (popover.dataset.word !== word) return;
         const unavailable = String(error?.message || error).includes("尚未安装");
-        renderEnglishLookupMessage(word, unavailable ? "英语词典（ECDICT）尚未安装，请先在设置中安装。" : `查询失败：${escapeHtml(error?.message || String(error))}`, popover);
+        renderEnglishLookupMessage(word, unavailable ? dictionaryInstallHint("英语词典（ECDICT）", "ecdict") : `查询失败：${escapeHtml(error?.message || String(error))}`, popover);
       }
       placeLookupPopover(popover, anchor);
     }
@@ -5156,7 +5426,7 @@ ${orderNote}`;
       } catch (error) {
         const message = String(error.message || "无法读取词库");
         const notInstalled = message.includes("尚未安装");
-        list.innerHTML = `<div class="user-phrases-empty">${escapeHtml(message)}${notInstalled ? `<br>请先在设置中安装 ${escapeHtml(language.dictionaryName)}。` : ""}</div>`;
+        list.innerHTML = `<div class="user-phrases-empty">${notInstalled ? dictionaryInstallHint(language.dictionaryName, language.dictionaryId) : escapeHtml(message)}</div>`;
         $("dictionaryLibraryCountText").textContent = notInstalled ? "词典未安装" : "读取失败";
       }
     }
@@ -5402,12 +5672,16 @@ ${orderNote}`;
     }
 
     function sortDictionaryLearningItems(items, sort) {
+      const importOrder = sort === "imported" ? wordListOrder($("dictionaryCategorySelect").value) : null;
       const alphabetical = (left, right) => String(left.word).localeCompare(String(right.word), currentLearningLanguage().id, { sensitivity: "base" });
       return [...items].sort((left, right) => {
         if (sort === "favorites") return favoriteDictionarySort(left, right);
         if (sort === "collins") return (Number(right.collins) || 0) - (Number(left.collins) || 0) || alphabetical(left, right);
         if (sort === "bnc") return dictionarySortValue(left, "bnc") - dictionarySortValue(right, "bnc") || alphabetical(left, right);
         if (sort === "frq") return dictionarySortValue(left, "frq") - dictionarySortValue(right, "frq") || alphabetical(left, right);
+        if (sort === "imported" && importOrder) {
+          return (importOrder.get(String(left.word).toLowerCase()) ?? Infinity) - (importOrder.get(String(right.word).toLowerCase()) ?? Infinity) || alphabetical(left, right);
+        }
         return alphabetical(left, right);
       });
     }
@@ -7767,7 +8041,7 @@ ${orderNote}`;
       } catch (error) {
         if (popover.dataset.word !== word) return;
         const unavailable = String(error?.message || error).includes("尚未安装");
-        popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><button type="button" data-dictionary-close aria-label="关闭">×</button></div><div class="dictionary-lookup-empty">${unavailable ? `${escapeHtml(currentLearningLanguage().dictionaryName)}尚未安装，请先在设置中安装。` : `查询失败：${escapeHtml(error?.message || String(error))}`}</div>`;
+        popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><button type="button" data-dictionary-close aria-label="关闭">×</button></div><div class="dictionary-lookup-empty">${unavailable ? dictionaryInstallHint(currentLearningLanguage().dictionaryName) : `查询失败：${escapeHtml(error?.message || String(error))}`}</div>`;
       }
       positionDictionaryLookup(lookupAnchor);
     }
@@ -9123,6 +9397,12 @@ ${orderNote}`;
       const target = currentSentence();
       const translation = currentTranslation();
       const hasGrammarCache = Boolean(currentGrammar());
+      const syntaxSupported = syntaxLanguages.has(state.learningLanguageId);
+      $("syntaxAnalyzeBtn").disabled = !syntaxSupported;
+      $("syntaxAnalyzeBtn").classList.toggle("is-active", state.grammarVisible && state.grammarSource === "syntax");
+      $("syntaxAnalyzeBtn").title = syntaxSupported
+        ? "免费、即时的句子成分分析（句法分析器，可能有误）"
+        : "成分分析目前支持英语和西班牙语";
       $("analyzeGrammarBtn").classList.toggle("has-cache", hasGrammarCache);
       const grammarAvailable = currentLearningLanguage().grammarAnalysisEnabled;
       if (!state.grammarLoading) $("analyzeGrammarBtn").disabled = !grammarAvailable;
@@ -9602,6 +9882,12 @@ ${orderNote}`;
     });
 
     $("saveAiSettingsBtn").addEventListener("click", saveAiSettings);
+    $("forgetAiKeyBtn").addEventListener("click", forgetAiKey);
+    document.querySelectorAll('input[name="aiProtection"]').forEach((radio) => {
+      radio.addEventListener("change", () => {
+        $("aiPassphraseInput").hidden = radio.value !== "passphrase" || !radio.checked;
+      });
+    });
     document.addEventListener("input", (event) => {
       if (event.target.matches?.("[data-word-review-input]")) updateWordReviewMask(event.target);
     });
@@ -10013,6 +10299,7 @@ ${orderNote}`;
     $("increaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(1));
     $("decreaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(-1));
     $("analyzeGrammarBtn").addEventListener("click", () => analyzeCurrentGrammar());
+    $("syntaxAnalyzeBtn").addEventListener("click", () => analyzeCurrentSyntax());
     $("analyzeGrammarBtn").addEventListener("contextmenu", openGrammarContextMenu);
     $("traditionalGrammarMenuBtn").addEventListener("click", closeGrammarContextMenu);
     $("showAiPromptMenuBtn").addEventListener("click", () => {
@@ -10270,6 +10557,9 @@ ${orderNote}`;
       event.preventDefault();
       lookupEnglishReference(hit.word, { clientX: event.clientX, avoidRect: hit.rect }, { fromPopover: event.target.closest(".english-lookup-popover") });
     });
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-dictionary-settings]")) openDictionarySettings();
+    });
     $("dictionaryLookupPopover").addEventListener("change", (event) => {
       if (!event.target.matches("[data-dictionary-auto-speak]")) return;
       updateDictionaryAutoSpeak(event.target, $("dictionaryLookupPopover").dataset.word || "");
@@ -10371,6 +10661,10 @@ ${orderNote}`;
     });
 
     $("themeToggleBtn").addEventListener("click", toggleTheme);
+    $("paletteSelect").addEventListener("change", (event) => applyPalette(event.target.value));
+    colorSchemeQuery?.addEventListener?.("change", () => {
+      if (state.theme.mode === "system") applyTheme(state.theme, { persist: false });
+    });
     $("openSettingsBtn").addEventListener("click", openSettings);
     $("closeSettingsBtn").addEventListener("click", closeSettings);
     document.querySelectorAll("[data-settings-tab]").forEach((button) => {

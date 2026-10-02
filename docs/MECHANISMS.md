@@ -1,6 +1,6 @@
 # langLSRW 机制
 
-最后更新：2026-09-30
+最后更新：2026-10-03
 
 本文档记录已实现产品行为的工作方式。它描述当前代码，而不是计划中的行为。每当触发条件、存储规则、身份边界、同步范围或部署机制发生变化时，都要更新本文档。
 
@@ -8,7 +8,7 @@
 
 langLSRW 有两种相互独立的身份模式：
 
-- Google 账号由其不可变的 Supabase user ID 识别。
+- Google 账号由其不可变的 Google 账号 ID（`sub`）识别，身份为 `cloud:<sub>`。
 - 本地用户由明确创建的本地用户名识别。
 - Google 账号绝不会被转换成以邮箱命名的本地用户。
 - 退出登录会清除当前云端身份，并返回用户选择。
@@ -33,7 +33,7 @@ langLSRW 有两种相互独立的身份模式：
 此机制的完整设计、数据列表和历史记录以中文维护在 [`USER_DATA.md`](USER_DATA.md)；两处要保持同步。
 
 - `src/user-data.js`（`window.langLSRWUserData`）把学习者的每一项数据作为记录 `{ identity, id, scope, collection, key, value, updatedAt, deleted }` 存入 IndexedDB 数据库 `langlsrw-userdata`（对象仓库 `records`，主键 `[identity, id]`，索引 `identity`）。已打开身份的记录会镜像到内存中，因此页面可以同步读取（`get`、`entries`）；`put`、`remove` 和 `append` 会立即更新内存，并在 300 ms 后用一个事务刷入数据库，在 `pagehide` 或页面隐藏时也会立即刷入。没有 IndexedDB 时，存储只在页面内存中工作。
-- 身份包括 `local:<name>`、`cloud:<Supabase user ID>` 和 `guest`（`userDataIdentity()`）；作用域为 `global` 或学习语言 ID。`openUserData()` 会在启动、本地登录、云端登录、退出登录和删除用户时打开身份，然后应用其设置；调用方随后通过 `tryLoadDefaultLibrary()` 恢复其位置。
+- 身份包括 `local:<name>`、`cloud:<Google sub>` 和 `guest`（`userDataIdentity()`）；作用域为 `global` 或学习语言 ID。`openUserData()` 会在启动、本地登录、云端登录、退出登录和删除用户时打开身份，然后应用其设置；调用方随后通过 `tryLoadDefaultLibrary()` 恢复其位置。
 - 注册表 `COLLECTIONS` 是读取、导出、导入、删除和同步共同使用的唯一列表：`settings`（全局）；每种语言的 `position`、`favoriteWord`、`favoriteSentence`、`wordProgress`、`grammarResult`，以及预留的 `sentenceProgress` 和 `customLibrary`；还有事件集合 `practiceEvent` 和 `reviewEvent`，它们标记为 `enabled: false`（目前没有任何代码读取它们，因此在有功能需要之前，它们既不会被写入、加载、导出，也不会被导入）。打开身份时，未注册或已禁用集合中的记录会被忽略。
 - 设置只按身份保存（`persistSetting()`、`applyIdentitySettings()`）：`learningLanguage`、`theme`、`shortcuts`、`speech`、`fonts`、`grammarColors`、`dictionaryAutoSpeak`、`practice`（每组新单词 / 句子数量）和 `ai`（AI 基础 URL 和模型）。除最后显示主题的缓存外，没有任何内容复制到 localStorage（`langLSRWBootTheme`，由 `applyTheme()` 写入，并由 `<body>` 顶部的内联脚本在渲染前应用）。`index.html` 也以 `html.is-booting` 开始，它会隐藏页面内容，直到启动流程应用了该身份的设置（或经过 1.5 s），因此不会闪现默认外观。`applyIdentitySettings()` 先切换到该身份的学习语言（不加载其句库，调用方接下来通过 `tryLoadDefaultLibrary()` 加载），用默认值补齐缺失设置（`defaultSettingValue()`），再应用其余设置；`恢复默认设置` 只重置当前身份。AI API 密钥按身份保存，但只保存在本设备：`localSecrets` 集合标记为 `exportable: false`，因此绝不会被导出、导入或同步。
 - `设置` 工具栏按钮打开 `#settingsModal`，这是一个居中的对话框，使用与 `词库` 相同的三列布局（`openSettings()` / `closeSettings()`；关闭、Esc 或点击背景会关闭它，打开期间学习快捷键会暂停）。左列列出分类（`data-settings-tab`：字体、快捷键、练习、AI 接口、本地词典、翻译缓存、句子成分颜色、设置管理）；`selectSettingsTab()` 在中列显示匹配的 `data-settings-panel`。中列每一行都是固定宽度名称加控件，因此控件和控件按钮会对齐；快捷键和语法颜色使用两列。右列（`renderSettingsDetail()`）显示分类标题和它的 `data-settings-intro`，以及指针下或聚焦中的控件的 `title`。面板淡入并滑入（`settings-panel-in`），行在悬停时获得浅色底色。所有控件 ID 都保持不变，因此保存和加载照旧工作。
@@ -42,18 +42,18 @@ langLSRW 有两种相互独立的身份模式：
 - 不属于个人数据且绝不导出：已知本地用户和当前本地用户、翻译缓存、已安装词典以及 中译 结果；当前页面完全不存储。重构前的键（`langLSRWUserWords:*`、`langLSRWUserSentences:*`、`langLSRWWordReviews:*`、`langLSRWWordManualMastery:*`、`langLSRWHistory:*`、`langLSRWLearnedCount:*`、`langLSRWLastPosition:*`、`langLSRWGrammarCache`）不再读取；调试阶段不迁移旧数据。
 - 清除浏览器网站数据会移除个人数据数据库和本地安装的词典；可替换的词典数据库绝不会存储用户创建的数据。
 
-## 云同步
+## 云同步（Google Drive）
 
-Supabase 为每个 Google 账号存储一行同步状态。
+服务器不保存任何用户数据。Google 账号的数据保存在该用户自己的 Google Drive 中一个可见的 `langLSRW/` 文件夹里（`drive.file` 权限：应用只能看到自己创建的文件和用户在选择器中选中的表格）。
 
-- 该行的数据内容与备份导出的个人数据文档相同（`collectCloudPayload()`）。
-- 登录（`activateCloudUser()`）会打开 `cloud:<id>` 身份，读取该行一次，并像导入一样合并（较新的记录胜出）；重构前的数据内容（`schemaVersion: 1`）会被忽略。
-- 自动云端写入目前由 `AUTO_CLOUD_SYNC_ENABLED = false` 禁用；保留的自动路径使用 1.2 秒防抖，但在该标志禁用期间什么也不做。
-- `手动同步` 操作会用当前文档替换该账号的云端行。
-- 文档不包含内置句库、词典、录音、其他身份的数据和 AI API 密钥。
-- Supabase Row Level Security 必须保证每个账号只能访问自己的行。
+- 登录：Google Identity Services 令牌模式（`src/google-drive.js`），弹窗授权，令牌只在内存中、约一小时有效；刷新页面后需要点一次 `立即同步` 重新连接（Google 要求由点击触发）。登录时可以选择把游客 / 本机用户的句库和学习记录一起带入账号。
+- `langLSRW/langlsrw-userdata.json`：与备份导出相同的个人数据文档。同步时先下载、按记录合并（`userData.importDocument`，较新者胜出，墓碑同步删除），内容有变化时再上传（`cloudSync.sameDocument` 比较）。旧版 lang_srw 的 `langlsrw-data.json` 保持不动、不再读取。
+- `langLSRW/libraries/*.tsv`：每个句库一个文件，句库 id、语言、更新时间和来源表格放在文件的 `appProperties` 中；`cloudSync.planLibrarySync` 决定上传 / 下载 / 改名 / 删除，本机删除通过墓碑（`langLSRWLibraryTombstones:<身份>`）把 Drive 文件移到回收站。
+- 我的词表（`wordList` 记录）属于个人数据文档，随它同步。
+- 自动同步：个人数据变化后约 8 秒、导入或修改句库后约 0.5 秒（`scheduleCloudSync()` 保留最早的截止时间）；同步进行中再有变化会在结束后再同步一次。
+- 文档不包含词典、录音、其他身份的数据和 AI API 密钥。
 
-相关实现：`src/user-data.js`、`src/app.js`、`src/auth/supabase-auth-service.js` 和 `supabase/schema.sql`。
+相关实现：`src/google-drive.js`、`src/cloud-sync.js`、`src/user-data.js`、`src/library-store.js` 和 `src/app.js` 的 `syncWithCloud()`。
 
 ### 正式发布方向
 
@@ -182,7 +182,7 @@ Supabase 为每个 Google 账号存储一行同步状态。
 
 真实听力录音可以和它的定时字幕文件一起导入，因此练习会播放原声，而不是 TTS。完整的中文用户和开发者指南维护在 [`AUDIO_LRC.md`](AUDIO_LRC.md)；行为变化时要保持两处同步。
 
-- `句库` 对话框有一个专门的 `音频字幕` 视图（`audioLibraryTabBtn` / `#audioLibraryPanel`，由 `setLibraryView()` 处理的三个视图之一）。它列出来自 `AUDIO_LIBRARY_MATERIALS` 且匹配当前学习语言的内置材料（当前英语有默认 `assets/audio/Audio_Example.m4a` + `.lrc`，西语暂无内置音频字幕材料），高亮正在使用的材料，并提供需要两个文件同时存在的音频 + `.lrc` 导入。`loadAudioLibraryMaterial()` 会获取字幕文本，并把整段音频作为 Blob 获取（本地 Python 服务器不支持 HTTP Range 请求，因此普通 URL 无法跳转定位到每个句子），然后调用共享的 `applyTimedMaterial()`；该函数会在 `音频字幕` 标签下切换句库，使工具栏的 `currentLibrarySelect` 显示 `音频字幕` 而不是 `自定义句库`。主页工具栏下拉框只在当前语言有内置音频字幕材料，或当前语言已经导入并正在使用音频字幕时允许选择 `音频字幕`；切到没有内置音频字幕材料的语言会释放原语言的音频对象，避免英语材料沿用到西语。`tools/build-web.mjs` 会把 `assets/audio/` 复制到 `dist`，因此文件提交后，内置材料也能在已部署站点上工作；放在这里的所有内容都可被公开下载。
+- `句库` 对话框有一个专门的 `音频字幕` 视图（`audioLibraryTabBtn` / `#audioLibraryPanel`，由 `setLibraryView()` 处理的三个视图之一）。它列出来自 `AUDIO_LIBRARY_MATERIALS` 且匹配当前学习语言的内置材料（当前英语有默认 `data/audio/Audio_Example.m4a` + `.lrc`，西语暂无内置音频字幕材料），高亮正在使用的材料，并提供需要两个文件同时存在的音频 + `.lrc` 导入。`loadAudioLibraryMaterial()` 会获取字幕文本，并把整段音频作为 Blob 获取（本地 Python 服务器不支持 HTTP Range 请求，因此普通 URL 无法跳转定位到每个句子），然后调用共享的 `applyTimedMaterial()`；该函数会在 `音频字幕` 标签下切换句库，使工具栏的 `currentLibrarySelect` 显示 `音频字幕` 而不是 `自定义句库`。主页工具栏下拉框只在当前语言有内置音频字幕材料，或当前语言已经导入并正在使用音频字幕时允许选择 `音频字幕`；切到没有内置音频字幕材料的语言会释放原语言的音频对象，避免英语材料沿用到西语。`tools/build-web.mjs` 会把 `data/audio/` 复制到 `dist`，因此文件提交后，内置材料也能在已部署站点上工作；放在这里的所有内容都可被公开下载。
 - 通过 `音频字幕` 面板导入两个文件，或把两个文件都拖放到听力页。`自定义句库` 面板的 `#fileInput` 接受单个 `.txt` / `.lrc`，并且只导入文本（`importSentenceFile()`）。`importSentenceFiles()` 会选出一个文本文件（`.txt` / `.lrc`）和一个音频文件（`audio/*` 或 `.m4a/.mp3/.wav/.ogg/.aac/.flac/.webm/.opus`）。只有文本文件时保留旧的纯文本导入；只有音频文件时会拒绝。
 - `parseTimedLrc()` 保留每一行的时间戳（`[mm:ss]`、`[mm:ss.xx]`、`[mm:ss:xx]`、一行多个时间戳，以及 `[offset:±ms]`）。行按时间排序。纯中文行会成为前一个英文行的翻译，无论它共享同一时间戳还是位于其后。`splitInlineTranslation()` 只在左侧没有 CJK 时才把 `English <separator> 中文` 当作行内成对内容，因此包含冒号的中文翻译不会被拆成假句子。每个英文行保留 `{ text, translation, start, end, boundaryEnd }`：`boundaryEnd` 是下一个英文行的真实时间戳，而独立行的播放 `end` 仍然位于它前方 `TIMED_SEGMENT_END_MARGIN_SECONDS`（0.3 s）（至少保留 0.5 s）；翻译行永远不会截短句子。与文本导入不同，定时导入不会移除重复行。`capTimedSegments()` 把每行限制为 `2.5 s + 0.6 s × words`。当一行没有句末标点且以 `, ; :` 或破折号结尾，或下一行以小写字母开头时，`mergeTimedFragments()` 会把它并入下一行，最多 4 行。合并后的句子从第一个片段的开始时间播放到最后一个片段的真实 `boundaryEnd`，而不是再次应用独立行的 0.3 秒边距；这会保留时间很紧的续接行的最后几个单词。所有者的 BBC 样例从 39 行变为 28 个句子。
 - `normalizeSentenceItem()` 会带着 `start` / `end` 继续传递，因为语法缓存、翻译编辑和 AI 分析会重写当前句子对象；没有这一点，片段会在第一次渲染时丢失，播放会静默回退到 TTS。
@@ -271,11 +271,10 @@ Supabase 为每个 Google 账号存储一行同步状态。
 
 ## 构建和部署
 
-源代码是维护中的项目；`dist/` 是可丢弃的输出。
+没有构建步骤：网站就是 `index.html` 和 `src/`。
 
-- `npm run build` 从当前源码生成 `dist/`。
-- Vercel 从源码仓库构建，并发布生成的输出。
-- 公开 Supabase 配置会在生产构建期间从 Vercel 环境变量注入。
-- 本地测试使用 `tools/start-langlsrw-server.bat` 和 `http://localhost:8848/`。
-- 成功的本地构建不会部署任何内容。
+- 每次推送和 PR 都由 GitHub Actions 运行测试；发布标签以 `v` 开头的 GitHub Release 才会部署到 lang.mltz.tech（`deploy/deploy.sh`：白名单 rsync，资源 URL 按内容哈希加版本号）。数据发布（如 `dictionaries-*`）不会部署。
+- 句库、词典和音频不放在服务器上：用户从数据发布下载后自行导入 / 安装（见 `data/dictionaries/README.md`）。
+- 句法分析服务（`services/parser`）单独用 `deploy/deploy-parser.sh` 部署。
+- 本地测试：`python3 -m http.server 8849`，打开 `http://localhost:8849/`。
 - 推送或部署需要所有者的显式操作或请求。

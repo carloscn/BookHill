@@ -141,7 +141,7 @@ locale = 已保存口音或 en-GB
 
 ### 常用西语句库
 
-- 位置：`assets/libraries/common-spanish-134910/`（`manifest.json`、`sentences.tsv`、`LICENSE.md`）。
+- 位置：`data/libraries/common-spanish-134910/`（`manifest.json`、`sentences.tsv`、`LICENSE.md`）。
 - 来源：Tatoeba，经 manythings.org `spa-eng` 整理，CC BY 2.0 FR，需署名 `www.manythings.org/anki` 和 `tatoeba.org`。
 - 内容：按西语原句去重后的 134,910 句，三列`编号 / 西语原句 / 英文翻译`。当前默认用英文翻译作为句子翻译显示；由英文翻译机器翻译的中文列仍在上层仓库 `third-party/Spanish/libraries/spa-eng/sentences.zh.tsv` 中逐步生成（2026-09-28 已按新规则从头重翻，完成 9,930 / 134,910 句），完成后再决定是否加入句库。
 - 文件约 10 MB，随网站部署。
@@ -253,7 +253,7 @@ locale = 已保存口音或 en-GB
 实现摘要（本节以下为决策过程和备选方案的记录，方案以后可能调整）：
 
 - 数据来源：方案 B，`doozan/spanish_data` 的 `frequency.csv`（按 Wiktionary 原形合并的 OpenSubtitles 字幕词频，CC BY-SA）。原始文件在上层仓库 `third-party/Spanish/frequency/`（附 `LICENSE.md`）。
-- 生成：`tools/build-spanish-frequency.py` 按“词频表下载与分析”中的清洗规则，另加“只差大小写的原形保留更常用者”（如 `TIC` / `tic`），生成 `assets/dictionaries/runtime/spanish-wiktionary/frequency.tsv`（`rank / word / count` 三列，17,458 个原形，约 340 KB），并把 `frequency`（文件、版本、条数、来源、授权）写入同目录 `manifest.json`；词频署名写入同目录 `LICENSE`。
+- 生成：`tools/build-spanish-frequency.py` 按“词频表下载与分析”中的清洗规则，另加“只差大小写的原形保留更常用者”（如 `TIC` / `tic`），生成 `build/dictionaries/spanish-wiktionary/frequency.tsv（已嵌入词典包）`（`rank / word / count` 三列，17,458 个原形，约 340 KB），并把 `frequency`（文件、版本、条数、来源、授权）写入同目录 `manifest.json`；词频署名写入同目录 `LICENSE`。
 - 存储：单独的文本文件（存储方案 2 的做法），不重建 70 MB 的词典包。浏览器中的词典 Worker 在词频版本变化时，把它导入已安装西语数据库中的独立表 `langlsrw_frequency`（原形、排名、次数，排名建索引），版本记在 `dictionary_meta.frequency_version`；之后所有分类、排序和取词都是数据库查询。导入只做一次，约几十毫秒；失败时查词和浏览照常，只有需要排名的查询提示。更新词频只需换 TSV 和版本号，用户无需重新下载词典。
 - 分档（owner 确认）：`常用 500`、`常用 1000`、`常用 2000`、`常用 3000`、`常用 5000`、`常用 10000`、`全部`；排序为`字母 A-Z`和`字幕词频`。`收藏`页的分类和排序同样使用这些分档（按收藏时保存的排名）。
 - 查词弹窗和单词详情显示“字幕 词频 #排名”（如 `casa` 为第 88）。
@@ -410,7 +410,7 @@ B. 常用度（词频）：
 
 ### 词典与授权
 
-ECDICT 是英语词典，不能用于西班牙语。西语第一版词典原料采用 Kaikki Spanish Wiktionary JSONL，源文件保存在 `../third-party/Spanish/kaikki.org-dictionary-Spanish.jsonl`，由 `tools/build-spanish-dictionary.py` 构建为 `assets/dictionaries/runtime/spanish-wiktionary/` 下的 SQLite gzip 包。该包沿用 ECDICT 兼容表结构，方便未来复用本地安装、查询、收藏和背词链路。
+ECDICT 是英语词典，不能用于西班牙语。西语第一版词典原料采用 Kaikki Spanish Wiktionary JSONL，源文件保存在 `../third-party/Spanish/kaikki.org-dictionary-Spanish.jsonl`，由 `tools/build-spanish-dictionary.py` 构建为 `build/dictionaries/spanish-wiktionary/` 下的 SQLite gzip 包。该包沿用 ECDICT 兼容表结构，方便未来复用本地安装、查询、收藏和背词链路。
 
 2026-09-27 的首次完整构建已经完成：770,716 个合并词条，SQLite 原始大小 436,391,936 bytes，gzip 包 70,042,471 bytes。设置页可以把它作为独立词典包安装、删除和测试查询；`西` 学习语言入口使用它进行右键查词和词库浏览。收藏、掌握记录和背词入口已按语言隔离，字幕词频分类与分类背词也已接入（2026-09-28）。中文解释缓存和 A1-C2 学习等级仍未接入。
 
@@ -428,8 +428,8 @@ Kaikki/Wiktionary 释义当前主要是英文 gloss；中文学习解释、例�
 
 | 数据 | 状态 | 授权 | 可否商用 | 主要义务 |
 |---|---|---|---|---|
-| 西语词典（Kaikki / Wiktionary，`assets/dictionaries/runtime/spanish-wiktionary/`） | 使用中 | CC BY-SA 4.0 | 可以 | 署名 Wiktionary 和 Kaikki.org；词典包及对它的修改（如加入词频字段）须以 CC BY-SA 发布并可获取 |
-| 常用西语句库（Tatoeba，经 manythings.org，`assets/libraries/common-spanish-134910/`） | 使用中 | CC BY 2.0 FR | 可以 | 署名 `tatoeba.org` 和 `www.manythings.org/anki`；无相同方式共享要求 |
+| 西语词典（Kaikki / Wiktionary，`build/dictionaries/spanish-wiktionary/`） | 使用中 | CC BY-SA 4.0 | 可以 | 署名 Wiktionary 和 Kaikki.org；词典包及对它的修改（如加入词频字段）须以 CC BY-SA 发布并可获取 |
+| 常用西语句库（Tatoeba，经 manythings.org，`data/libraries/common-spanish-134910/`） | 使用中 | CC BY 2.0 FR | 可以 | 署名 `tatoeba.org` 和 `www.manythings.org/anki`；无相同方式共享要求 |
 | 句库中文列（浏览器内置翻译由英文列生成，`sentences.zh.tsv`） | 生成中，未加入网站 | 源自 CC BY 2.0 FR 的衍生内容 | 以源授权看可以 | 保留 Tatoeba / manythings 署名；浏览器翻译服务本身的使用条款尚未核实，商用前需确认 |
 | ELELex 等级词表（CEFRLex） | 候选（推荐） | CC BY-NC-SA 4.0 | **不可以** | 署名并引用 François & De Cock (2018)；仅限非商业；衍生数据须同样授权；与 CC BY-SA 数据分开存放 |
 | 字幕词频 `doozan/spanish_data` 的 `frequency.csv`（生成 `frequency.tsv`） | 使用中 | CC BY-SA 3.0（仓库标注） | 可以 | 署名 FrequencyWords / OpenSubtitles 和该仓库；衍生数据须以 CC BY-SA 发布 |

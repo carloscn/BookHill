@@ -1,20 +1,43 @@
 <!doctype html>
-<html lang="zh-CN" class="is-booting">
+<html lang="zh-CN" class="is-booting" data-theme="light" data-palette="default">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Content-Security-Policy: only this site's and Google's scripts may run (no inline scripts except the theme
+       boot script below, whose hash is listed; no eval — 'wasm-unsafe-eval' only lets the dictionary's sqlite-wasm
+       compile). This is the main defence of the API key against injected script. If the boot script changes, update
+       its sha256 here (tests/csp.test.js prints the new value). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-acsLtGe8M7mz8+mRLepEAE0+u3M2D3wBX2sw+fUP4CA=' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; frame-src https://accounts.google.com https://docs.google.com https://drive.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>langLSRW</title>
   <!-- Public OAuth client ID (Google sign-in + Drive) and browser API key for the Sheets Picker; both are restricted to this site's origins. -->
   <meta name="google-client-id" content="180213407454-r5uujgmro3f0o8opcens160nkrn3s85q.apps.googleusercontent.com">
+  <!-- Free sentence-component parser (spaCy, services/parser) behind nginx on the same origin. -->
+  <meta name="syntax-parser-url" content="/api/parse">
   <meta name="google-api-key" content="AIzaSyBVHLOHo33UvlhmQPrVwcNmSlbOrUTFgeY">
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20261002-4">
+  <script>
+    // Same theme model as nav.mltz.tech: light/dark (following the OS unless chosen) × palette on <html>. The cache
+    // of the last shown theme (langLSRWBootTheme) is applied before paint; the identity's own setting replaces it.
+    (function () {
+      var theme = null;
+      try { theme = JSON.parse(localStorage.getItem("langLSRWBootTheme") || "null"); } catch (e) {}
+      var mode = theme && (theme.mode === "light" || theme.mode === "dark") ? theme.mode : "system";
+      if (mode === "system") {
+        try { mode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; } catch (e) { mode = "light"; }
+      }
+      var palette = theme && { github: 1, reddit: 1, twitter: 1, anki: 1 }[theme.palette] ? theme.palette : "default";
+      document.documentElement.setAttribute("data-theme", mode);
+      document.documentElement.setAttribute("data-palette", palette);
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
+  <link rel="stylesheet" href="src/styles.css?v=20261003-4">
 
 </head>
-<body data-theme="eye" data-active-page="listenPage">
-  <!-- Browser cache of the last shown theme (langLSRWBootTheme), applied before anything renders; the user's own theme setting replaces it once personal data loads. -->
-  <script>try { var bootTheme = localStorage.getItem("langLSRWBootTheme"); if (bootTheme) document.body.dataset.theme = bootTheme; } catch (error) {}</script>
+<body data-active-page="listenPage">
   <section id="loginScreen" class="login-screen active" aria-label="登录" tabindex="-1">
     <div class="login-card">
       <h1>langLSRW</h1>
@@ -74,7 +97,14 @@
         </nav>
       </div>
       <div class="toolbar">
-        <button id="themeToggleBtn" class="theme-toggle" type="button" aria-label="切换背景模式">黑夜</button>
+        <select id="paletteSelect" class="palette-select" title="切换色系" aria-label="色系">
+          <option value="default">默认绿</option>
+          <option value="github">GitHub</option>
+          <option value="reddit">Reddit</option>
+          <option value="twitter">Twitter</option>
+          <option value="anki">Anki</option>
+        </select>
+        <button id="themeToggleBtn" class="theme-toggle" type="button" aria-label="切换浅色/深色">深色</button>
         <button id="openLibraryBtn" type="button">句库</button>
         <button id="openDictionaryLibraryBtn" type="button">词库</button>
         <button id="userPhrasesBtn" type="button">收藏</button>
@@ -158,6 +188,7 @@
                   <button id="decreaseSpeechRateBtn" type="button" title="减慢朗读" aria-label="减慢朗读">▼</button>
                 </span>
               </div>
+              <button id="syntaxAnalyzeBtn" type="button">成分分析</button>
               <button id="analyzeGrammarBtn" type="button">Ai语法分析</button>
               <div class="sentence-tool-end">
                 <div id="counter" class="counter" aria-label="句子序号">
@@ -260,6 +291,13 @@
         <p>写作练习页会放造句、作文、改写、模板积累和写作记录。</p>
       </div>
     </section>
+    <footer class="site-footer">
+      <a href="https://github.com/carloscn/BookHill" target="_blank" rel="noopener" title="源代码">
+        <svg class="site-footer-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg><span>github.com/carloscn/BookHill</span>
+      </a>
+      <span class="site-footer-dot" aria-hidden="true">·</span>
+      <span>鸣谢 <a href="https://apps.ankiweb.net/" target="_blank" rel="noopener">Anki</a>（apps.ankiweb.net）</span>
+    </footer>
   </main>
   <div id="libraryModal" class="library-modal" hidden>
     <div class="library-dialog" role="dialog" aria-modal="true" aria-labelledby="libraryModalTitle">
@@ -551,7 +589,7 @@
                 <button id="resetPracticeSettingsBtn" type="button" title="把练习每组数量、间隔扩大系数和掌握标准恢复为默认值">恢复默认值</button>
               </div>
             </div>
-            <div class="settings-section" data-settings-panel="ai" data-settings-intro="AI 语法分析等功能使用的接口。API Key 只保存在本机，不会导出或同步。" hidden>
+            <div class="settings-section" data-settings-panel="ai" data-settings-intro="AI 语法分析等功能使用的接口。API Key 加密保存在本机，不会导出或同步。" hidden>
               <div class="settings-section-title">AI 接口</div>
               <label>
                 接口地址
@@ -563,9 +601,20 @@
               </label>
               <label>
                 API Key
-                <input id="aiApiKeyInput" type="password" title="你的 API Key；只保存在本机浏览器，不会导出或同步" autocomplete="off" placeholder="只保存在当前浏览器">
+                <input id="aiApiKeyInput" type="password" title="你的 API Key；加密保存在本机浏览器，不会导出或同步" autocomplete="off" placeholder="留空则保留已保存的 Key">
               </label>
-              <button id="saveAiSettingsBtn" type="button" title="保存接口地址、模型和 API Key">保存 AI 设置</button>
+              <div id="aiKeyState" class="small-note"></div>
+              <fieldset class="ai-protection">
+                <legend>API Key 的保护方式</legend>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="device" checked><span>本机加密（推荐）：用这台设备上不可导出的密钥加密，换设备无法解开</span></label>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="passphrase"><span>解锁密码：再用你设的密码加密，每次打开页面第一次使用时输入</span></label>
+                <label class="radio-row"><input type="radio" name="aiProtection" value="session"><span>只用这一次：不保存，关闭页面后忘记</span></label>
+                <input id="aiPassphraseInput" type="password" autocomplete="new-password" placeholder="解锁密码（至少 6 位）" hidden>
+              </fieldset>
+              <div class="ai-settings-actions">
+                <button id="saveAiSettingsBtn" type="button" title="保存接口地址、模型和 API Key">保存 AI 设置</button>
+                <button id="forgetAiKeyBtn" type="button" title="删除这台设备上保存的 API Key">删除 Key</button>
+              </div>
               <div id="aiSettingsStatus" class="small-note" aria-live="polite"></div>
             </div>
             <div class="settings-section" data-settings-panel="dictionary" data-settings-intro="本机安装的词典，用于查词、词库和背单词。" hidden>
@@ -883,14 +932,16 @@
   <script src="src/cloud-sync.js?v=20261002-1"></script>
   <script src="src/google-drive.js?v=20261002-1"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
+  <script src="src/secret-store.js?v=20261003-1"></script>
+  <script src="src/syntax-tree.js?v=20261003-1"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20261002-3"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261003-1"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20261002-1"></script>
-  <script src="src/app.js?v=20261002-6"></script>
+  <script src="src/app.js?v=20261003-5"></script>
 </body>
 </html>
