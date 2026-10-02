@@ -1,20 +1,44 @@
 (() => {
+  // The site serves no dictionary data: users download a package from the GitHub release below and install it
+  // from the file. Metadata mirrors what tools/build-*.py wrote into each package's dictionary_meta.
+  const DICTIONARY_RELEASE_URL = "https://github.com/carloscn/BookHill/releases/tag/dictionaries-2026.10";
+  const DICTIONARY_DOWNLOAD_BASE = "https://github.com/carloscn/BookHill/releases/download/dictionaries-2026.10/";
   const DICTIONARY_PACKAGES = {
     ecdict: {
       id: "ecdict",
       languageId: "en",
       label: "英语",
-      manifestUrl: "assets/dictionaries/runtime/ecdict/manifest.json",
       databaseName: "/ecdict.sqlite",
-      testWord: "dictionary"
+      testWord: "dictionary",
+      manifest: {
+        schemaVersion: 1,
+        id: "ecdict",
+        name: "ECDICT 英汉词典",
+        version: "2026.09.24",
+        file: "ecdict.sqlite.gz",
+        entryCount: 770611,
+        databaseBytes: 178720768,
+        downloadBytes: 71124602,
+        license: "MIT"
+      }
     },
     "spanish-wiktionary": {
       id: "spanish-wiktionary",
       languageId: "es",
       label: "西语",
-      manifestUrl: "assets/dictionaries/runtime/spanish-wiktionary/manifest.json",
       databaseName: "/spanish-wiktionary.sqlite",
-      testWord: "gratis"
+      testWord: "gratis",
+      manifest: {
+        schemaVersion: 1,
+        id: "spanish-wiktionary",
+        name: "西语 Wiktionary 词典",
+        version: "2026.09.27",
+        file: "spanish-wiktionary.sqlite.gz",
+        entryCount: 770716,
+        databaseBytes: 437243904,
+        downloadBytes: 70438772,
+        license: "CC BY-SA 4.0"
+      }
     }
   };
 
@@ -22,7 +46,7 @@
     constructor(options = {}) {
       this.packages = options.packages || DICTIONARY_PACKAGES;
       this.activeDictionaryId = options.activeDictionaryId || "ecdict";
-      this.workerUrl = options.workerUrl || "src/dictionary/dictionary-worker.js?v=20260928-1";
+      this.workerUrl = options.workerUrl || "src/dictionary/dictionary-worker.js?v=20261002-1";
       this.worker = null;
       this.sequence = 0;
       this.pending = new Map();
@@ -80,13 +104,15 @@
     }
 
     async loadManifest(id = this.activeDictionaryId) {
-      const dictionary = this.dictionary(id);
-      if (this.manifests.has(id)) return this.manifests.get(id);
-      const response = await fetch(dictionary.manifestUrl, { cache: "no-store" });
-      if (!response.ok) throw new Error(`无法读取词典清单（${response.status}）`);
-      const manifest = await response.json();
-      this.manifests.set(id, manifest);
-      return manifest;
+      return this.dictionary(id).manifest;
+    }
+
+    downloadUrl(id = this.activeDictionaryId) {
+      return DICTIONARY_DOWNLOAD_BASE + this.dictionary(id).manifest.file;
+    }
+
+    releaseUrl() {
+      return DICTIONARY_RELEASE_URL;
     }
 
     workerDictionary(id = this.activeDictionaryId) {
@@ -98,17 +124,9 @@
       };
     }
 
-    // Frequency ranks shipped beside a dictionary package (manifest `frequency`); the Worker imports them into the
-    // installed database when their version changes. Dictionaries without ranks return null.
-    async frequencyOptions(id = this.activeDictionaryId) {
-      const dictionary = this.dictionary(id);
-      const manifest = await this.loadManifest(id).catch(() => null);
-      const frequency = manifest?.frequency;
-      if (!frequency?.file || !frequency.version) return null;
-      return {
-        url: new URL(frequency.file, new URL(dictionary.manifestUrl, location.href)).href,
-        version: String(frequency.version)
-      };
+    // Spanish frequency ranks are embedded in the package (langlsrw_frequency); nothing is fetched at runtime.
+    async frequencyOptions() {
+      return null;
     }
 
     async status(id = this.activeDictionaryId) {
@@ -132,19 +150,21 @@
       return entries;
     }
 
-    async install(id = this.activeDictionaryId) {
+    // `file` is the package the user downloaded (.sqlite.gz, or an uncompressed .sqlite).
+    async install(id = this.activeDictionaryId, file) {
+      if (!(file instanceof Blob)) throw new Error("请选择下载好的词典文件");
       const dictionary = this.dictionary(id);
-      const manifest = await this.loadManifest(id);
-      const databaseUrl = new URL(manifest.file, new URL(dictionary.manifestUrl, location.href)).href;
+      const manifest = dictionary.manifest;
+      const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
       return this.call("install", {
         dictionary: this.workerDictionary(id),
-        databaseUrl,
-        totalBytes: manifest.downloadBytes || manifest.databaseBytes,
-        compression: manifest.format === "sqlite+gzip" ? "gzip" : "none",
+        file,
+        totalBytes: file.size,
+        compression: head[0] === 0x1f && head[1] === 0x8b ? "gzip" : "none",
         schemaVersion: manifest.schemaVersion,
         version: manifest.version,
         dictionaryId: manifest.id || dictionary.id,
-        frequency: await this.frequencyOptions(id)
+        frequency: null
       });
     }
 

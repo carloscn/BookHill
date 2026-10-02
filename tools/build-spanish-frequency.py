@@ -1,7 +1,7 @@
 """Build the Spanish lemma frequency ranks used for the Spanish 词库 categories.
 
 Input:  ../third-party/Spanish/frequency/frequency.csv (doozan/spanish_data, CC BY-SA)
-Output: assets/dictionaries/runtime/spanish-wiktionary/frequency.tsv (rank, word, count)
+Output: build/dictionaries/spanish-wiktionary/frequency.tsv (rank, word, count)
         and the `frequency` entry of that folder's manifest.json.
 
 The browser dictionary Worker imports the TSV into a `langlsrw_frequency` table inside the installed Spanish
@@ -25,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT = ROOT.parent / "third-party" / "Spanish" / "frequency" / "frequency.csv"
-DEFAULT_OUTPUT_DIR = ROOT / "assets" / "dictionaries" / "runtime" / "spanish-wiktionary"
+DEFAULT_OUTPUT_DIR = ROOT / "build" / "dictionaries" / "spanish-wiktionary"
 EXCLUDED_POS = {"prop", "letter", "prefix"}
 KEPT_NOUSAGE = {"a"}
 ARTICLE_FORMS_IN_ELLA = ("la", "las")

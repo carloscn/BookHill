@@ -6,7 +6,7 @@
   <title>langLSRW</title>
   <!-- Page content stays hidden until the user's own settings (theme, fonts) are applied, so the default look never flashes. -->
   <style>html.is-booting body > * { visibility: hidden; }</style>
-  <link rel="stylesheet" href="src/styles.css?v=20261002-1">
+  <link rel="stylesheet" href="src/styles.css?v=20261002-2">
 
 </head>
 <body data-theme="eye" data-active-page="listenPage">
@@ -547,7 +547,9 @@
             </div>
             <div class="settings-section" data-settings-panel="dictionary" data-settings-intro="本机安装的词典，用于查词、词库和背单词。" hidden>
               <div class="settings-section-title">本地词典</div>
+              <p class="small-note">词典不放在服务器上：先下载词典文件（约 70 MB，<a id="dictionaryReleaseLink" href="https://github.com/carloscn/BookHill/releases/tag/dictionaries-2026.10" target="_blank" rel="noopener">全部下载</a>），再点「从文件安装」选择它。安装后保存在本浏览器里，可离线查词。</p>
               <div id="dictionarySettingsList" class="dictionary-settings-list" aria-live="polite"></div>
+              <input id="dictionaryFileInput" type="file" accept=".gz,.sqlite,application/gzip" hidden>
             </div>
             <div class="settings-section" data-settings-panel="translation" data-settings-intro="免费翻译的结果会缓存在浏览器里，避免重复请求。" hidden>
               <div class="settings-section-title">翻译缓存</div>
@@ -849,12 +851,12 @@
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
   <script src="src/library-import.js?v=20261002-1"></script>
   <script src="src/library-store.js?v=20261002-1"></script>
-  <script src="src/dictionary/dictionary-service.js?v=20260928-1"></script>
+  <script src="src/dictionary/dictionary-service.js?v=20261002-1"></script>
   <script src="src/languages/en/text.js?v=20260928-2"></script>
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20260928-5"></script>
-  <script src="src/app.js?v=20261002-1"></script>
+  <script src="src/app.js?v=20261002-2"></script>
 </body>
 </html>

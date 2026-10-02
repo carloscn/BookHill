@@ -1753,6 +1753,13 @@
       white-space: nowrap;
     }
 
+    .dictionary-download-link {
+      grid-column: 1 / -1;
+      color: var(--accent);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
     .dictionary-install-progress {
       width: 100%;
       height: 8px;

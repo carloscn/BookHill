@@ -211,10 +211,7 @@ async function install(payload) {
   const dictionary = normalizeDictionary(payload);
   closeDatabase();
   forgetFrequency(dictionary);
-  const response = await fetch(payload.databaseUrl, { cache: "no-store" });
-  if (!response.ok || !response.body) {
-    throw new Error(`词典下载失败（${response.status}）`);
-  }
+  if (!(payload.file instanceof Blob)) throw new Error("没有收到词典文件");
 
   let received = 0;
   if (payload.compression === "gzip" && typeof DecompressionStream === "undefined") {
@@ -227,16 +224,21 @@ async function install(payload) {
       controller.enqueue(chunk);
     }
   });
-  const downloadedBody = response.body.pipeThrough(progressStream);
+  const downloadedBody = payload.file.stream().pipeThrough(progressStream);
   const databaseBody = payload.compression === "gzip"
     ? downloadedBody.pipeThrough(new DecompressionStream("gzip"))
     : downloadedBody;
   const reader = databaseBody.getReader();
-  await pool.importDb(dictionary.databaseName, async () => {
-    const { done, value } = await reader.read();
-    if (done) return undefined;
-    return value;
-  });
+  try {
+    await pool.importDb(dictionary.databaseName, async () => {
+      const { done, value } = await reader.read();
+      if (done) return undefined;
+      return value;
+    });
+  } catch (error) {
+    pool.unlink(dictionary.databaseName);
+    throw new Error(`词典文件无法读取，请确认选择的是 ${dictionary.id} 的 .sqlite.gz 文件（${error.message || error}）`);
+  }
 
   openDatabase(dictionary);
   const dbMeta = metadata();

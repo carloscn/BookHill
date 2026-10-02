@@ -17,7 +17,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE_JSONL = ROOT.parent / "third-party" / "Spanish" / "kaikki.org-dictionary-Spanish.jsonl"
-DEFAULT_OUTPUT_DIR = ROOT / "assets" / "dictionaries" / "runtime" / "spanish-wiktionary"
+DEFAULT_OUTPUT_DIR = ROOT / "build" / "dictionaries" / "spanish-wiktionary"
 SCHEMA_VERSION = 1
 BUILD_BATCH_SIZE = 5_000
 MAX_LINES_PER_FIELD = 30

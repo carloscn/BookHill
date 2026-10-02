@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "scripts": {
     "build:dictionary": "python tools/build-ecdict.py",
-    "build:dictionary:es": "python tools/build-spanish-dictionary.py",
+    "build:dictionary:es": "python tools/build-spanish-dictionary.py && python tools/build-spanish-frequency.py && python tools/embed-spanish-frequency.py --version $(date +%Y.%m.%d)",
     "vendor:sqlite": "node tools/vendor-sqlite-wasm.mjs",
     "prepare:dictionary": "npm run vendor:sqlite && npm run build:dictionary",
     "test:dictionary": "python tools/test-ecdict-build.py"

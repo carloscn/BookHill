@@ -2851,7 +2851,7 @@ const fallbackSentences = [
         return `已安装 · ${count} 词条 · v${metadata?.dictionary_version || manifest?.version || "未知"}`;
       }
       if (manifest) {
-        return `未安装 · ${Number(manifest.entryCount).toLocaleString()} 词条 · 下载 ${formatBytes(manifest.downloadBytes || manifest.databaseBytes)} · 本地 ${formatBytes(manifest.databaseBytes)}`;
+        return `未安装 · ${Number(manifest.entryCount).toLocaleString()} 词条 · 文件 ${formatBytes(manifest.downloadBytes || manifest.databaseBytes)} · 安装后占用 ${formatBytes(manifest.databaseBytes)}`;
       }
       return "本地词典尚未准备好。";
     }
@@ -2868,7 +2868,9 @@ const fallbackSentences = [
         const item = byId.get(pkg.id) || dictionaryStatusResults.get(pkg.id) || { package: pkg };
         const installed = Boolean(item.installed);
         const busy = Boolean(dictionaryBusyId);
-        const installLabel = installed ? (item.updateAvailable ? "更新" : "重装") : "安装";
+        const installLabel = installed ? (item.updateAvailable ? "从文件更新" : "从文件重装") : "从文件安装";
+        const downloadUrl = window.langLSRWDictionary.downloadUrl(pkg.id);
+        const fileName = pkg.manifest?.file || "";
         const testWord = pkg.testWord || "dictionary";
         return `
           <div class="dictionary-settings-card" data-dictionary-card="${escapeHtml(pkg.id)}">
@@ -2879,7 +2881,8 @@ const fallbackSentences = [
             <div class="dictionary-status" data-dictionary-status>${escapeHtml(dictionaryStatusText(item))}</div>
             <progress class="dictionary-install-progress" data-dictionary-progress max="100" value="0" hidden></progress>
             <div class="dictionary-settings-actions">
-              <button type="button" data-dictionary-action="install" data-dictionary-id="${escapeHtml(pkg.id)}" title="${escapeHtml(installLabel)} ${escapeHtml(dictionaryPackageLabel(item))}" ${busy ? "disabled" : ""}>${installLabel}</button>
+              <a class="dictionary-download-link" href="${escapeHtml(downloadUrl)}" download title="从 GitHub 下载 ${escapeHtml(fileName)}">下载 ${escapeHtml(fileName)}</a>
+              <button type="button" data-dictionary-action="install" data-dictionary-id="${escapeHtml(pkg.id)}" title="选择已下载的 ${escapeHtml(fileName)}，安装${escapeHtml(dictionaryPackageLabel(item))}" ${busy ? "disabled" : ""}>${installLabel}</button>
               <button type="button" data-dictionary-action="test" data-dictionary-id="${escapeHtml(pkg.id)}" title="查询测试词：${escapeHtml(testWord)}" ${busy || !installed ? "disabled" : ""}>测试</button>
               <button type="button" data-dictionary-action="remove" data-dictionary-id="${escapeHtml(pkg.id)}" title="删除当前浏览器中安装的${escapeHtml(item.manifest?.name || pkg.id)}" ${busy || !installed ? "disabled" : ""}>删除</button>
             </div>
@@ -2907,8 +2910,16 @@ const fallbackSentences = [
       if (status) status.textContent = message;
     }
 
-    async function installDictionary(dictionaryId = "ecdict") {
+    function chooseDictionaryFile(dictionaryId) {
       if (!window.langLSRWDictionary || dictionaryBusyId) return;
+      const input = $("dictionaryFileInput");
+      input.dataset.dictionaryId = dictionaryId;
+      input.value = "";
+      input.click();
+    }
+
+    async function installDictionary(dictionaryId = "ecdict", file) {
+      if (!window.langLSRWDictionary || dictionaryBusyId || !file) return;
       const pkg = window.langLSRWDictionary.dictionary(dictionaryId);
       const card = dictionaryCard(dictionaryId);
       const progress = card?.querySelector("[data-dictionary-progress]");
@@ -2929,11 +2940,11 @@ const fallbackSentences = [
           currentProgress.value = received;
         }
         setDictionaryCardMessage(dictionaryId, total
-          ? `正在安装：${formatBytes(received)} / ${formatBytes(total)}`
+          ? `正在安装：${formatBytes(received)} / ${formatBytes(total)}（请勿关闭页面）`
           : `正在安装：${formatBytes(received)}`);
       });
       try {
-        await window.langLSRWDictionary.install(dictionaryId);
+        await window.langLSRWDictionary.install(dictionaryId, file);
         await refreshDictionaryStatus();
       } catch (error) {
         setDictionaryCardMessage(dictionaryId, `安装失败：${error.message || error}`);
@@ -9046,9 +9057,13 @@ ${orderNote}`;
       const button = event.target.closest("[data-dictionary-action]");
       if (!button) return;
       const dictionaryId = button.dataset.dictionaryId || "ecdict";
-      if (button.dataset.dictionaryAction === "install") installDictionary(dictionaryId);
+      if (button.dataset.dictionaryAction === "install") chooseDictionaryFile(dictionaryId);
       if (button.dataset.dictionaryAction === "test") testDictionary(dictionaryId);
       if (button.dataset.dictionaryAction === "remove") removeDictionary(dictionaryId);
+    });
+    $("dictionaryFileInput").addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      if (file) installDictionary(event.target.dataset.dictionaryId || "ecdict", file);
     });
     $("clearTranslationCacheBtn").addEventListener("click", clearTranslationCache);
     $("openLibraryBtn").addEventListener("click", openLibraryModal);
