@@ -5221,6 +5221,23 @@ ${orderNote}`;
       return popover;
     }
 
+    // Word cards need the learning language's dictionary installed in this browser (dictionaries are not served by
+    // the site). Instead of a dead end, offer the download and a shortcut to 设置 → 本地词典.
+    function dictionaryInstallHint(dictionaryName, dictionaryId = currentDictionaryId()) {
+      const downloadUrl = window.langLSRWDictionary?.downloadUrl?.(dictionaryId) || "";
+      return `${escapeHtml(dictionaryName)}还没有安装到这个浏览器，所以查不到释义。安装一次即可离线查词：`
+        + `<div class="dictionary-install-hint">`
+        + (downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download>① 下载词典文件（约 70 MB）</a>` : "")
+        + `<button type="button" data-open-dictionary-settings>② 打开「本地词典」从文件安装</button></div>`;
+    }
+
+    function openDictionarySettings() {
+      closeDictionaryLookup();
+      closeEnglishLookup();
+      openSettings();
+      selectSettingsTab("dictionary");
+    }
+
     function renderEnglishLookupMessage(word, message, popover = $("englishLookupPopover")) {
       popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><div class="dictionary-lookup-actions"><span class="english-lookup-label">英语词典</span><button type="button" data-dictionary-close aria-label="关闭" title="关闭英语词典查询">×</button></div></div><div class="dictionary-lookup-empty">${message}</div>`;
     }
@@ -5254,7 +5271,7 @@ ${orderNote}`;
       } catch (error) {
         if (popover.dataset.word !== word) return;
         const unavailable = String(error?.message || error).includes("尚未安装");
-        renderEnglishLookupMessage(word, unavailable ? "英语词典（ECDICT）尚未安装，请先在设置中安装。" : `查询失败：${escapeHtml(error?.message || String(error))}`, popover);
+        renderEnglishLookupMessage(word, unavailable ? dictionaryInstallHint("英语词典（ECDICT）", "ecdict") : `查询失败：${escapeHtml(error?.message || String(error))}`, popover);
       }
       placeLookupPopover(popover, anchor);
     }
@@ -5409,7 +5426,7 @@ ${orderNote}`;
       } catch (error) {
         const message = String(error.message || "无法读取词库");
         const notInstalled = message.includes("尚未安装");
-        list.innerHTML = `<div class="user-phrases-empty">${escapeHtml(message)}${notInstalled ? `<br>请先在设置中安装 ${escapeHtml(language.dictionaryName)}。` : ""}</div>`;
+        list.innerHTML = `<div class="user-phrases-empty">${notInstalled ? dictionaryInstallHint(language.dictionaryName, language.dictionaryId) : escapeHtml(message)}</div>`;
         $("dictionaryLibraryCountText").textContent = notInstalled ? "词典未安装" : "读取失败";
       }
     }
@@ -8024,7 +8041,7 @@ ${orderNote}`;
       } catch (error) {
         if (popover.dataset.word !== word) return;
         const unavailable = String(error?.message || error).includes("尚未安装");
-        popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><button type="button" data-dictionary-close aria-label="关闭">×</button></div><div class="dictionary-lookup-empty">${unavailable ? `${escapeHtml(currentLearningLanguage().dictionaryName)}尚未安装，请先在设置中安装。` : `查询失败：${escapeHtml(error?.message || String(error))}`}</div>`;
+        popover.innerHTML = `<div class="dictionary-lookup-header"><strong>${escapeHtml(word)}</strong><button type="button" data-dictionary-close aria-label="关闭">×</button></div><div class="dictionary-lookup-empty">${unavailable ? dictionaryInstallHint(currentLearningLanguage().dictionaryName) : `查询失败：${escapeHtml(error?.message || String(error))}`}</div>`;
       }
       positionDictionaryLookup(lookupAnchor);
     }
@@ -10539,6 +10556,9 @@ ${orderNote}`;
       if (!hit?.word) return;
       event.preventDefault();
       lookupEnglishReference(hit.word, { clientX: event.clientX, avoidRect: hit.rect }, { fromPopover: event.target.closest(".english-lookup-popover") });
+    });
+    document.addEventListener("click", (event) => {
+      if (event.target.closest("[data-open-dictionary-settings]")) openDictionarySettings();
     });
     $("dictionaryLookupPopover").addEventListener("change", (event) => {
       if (!event.target.matches("[data-dictionary-auto-speak]")) return;
