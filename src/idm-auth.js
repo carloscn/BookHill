@@ -1,4 +1,5 @@
-// Public OIDC client: code + S256 PKCE; credentials and tokens never enter persistent storage.
+// Account portal OIDC issuer: code + S256 PKCE; subject stays the Kanidm UUID.
+// Credentials and tokens never enter persistent storage.
 (function () {
   const scriptUrl = document.currentScript.src;
   const issuer = new URL(document.querySelector('meta[name="idm-issuer"]').content);

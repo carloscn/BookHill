@@ -6,7 +6,7 @@
 
 ![langLSRW practice view](docs/screenshot.png)
 
-langLSRW is a static web app with no backend for learning data. Sign in with the MLTZ account (Kanidm OIDC). Learning data stays in the browser; users who bind Google in the account centre and grant BookHill Drive access can also sync it to their own Google Drive. The BookHill server hosts code and a stateless sentence parser.
+langLSRW is a static web app with no backend for learning data. Sign in through the MLTZ account centre using Google or your username/Passkey. The account centre issues a BookHill OIDC code after login and any required TOTP, keeping the stable Kanidm user ID. Learning data stays in the browser; users who bind Google and grant BookHill Drive access can also sync it to their own Google Drive. The BookHill server hosts code and a stateless sentence parser.
 
 The user interface is in Simplified Chinese. Button names below are translated.
 

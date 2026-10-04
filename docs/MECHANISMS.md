@@ -8,7 +8,7 @@
 
 langLSRW 有两种相互独立的身份模式：
 
-- 云登录由 Kanidm OIDC 的稳定 `sub` 识别，身份为 `idm:<sub>`；Google 只负责已绑定用户的云盘授权。
+- 云登录通过账户门户的 BookHill OIDC issuer 完成，可用 Google 或用户名 / Passkey；`sub` 仍为 Kanidm UUID，身份仍为 `idm:<sub>`。Google 云盘需要另行授权。
 - 本地用户由明确创建的本地用户名识别。
 - 统一账户和 Google 账号都不会按邮箱猜测身份。旧 `cloud:<Google sub>` 只在验证对应绑定和 Google 授权后复制到统一身份。
 - 退出登录会清除当前云端身份，并返回用户选择。
