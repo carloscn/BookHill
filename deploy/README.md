@@ -126,14 +126,20 @@ directory instead of vpsde — handy for checking the output.
 5. **No sudo password for vpsde is stored anywhere in this repo.** Step 3 above needs
    it — hand the commands to the owner or whoever holds it, don't try to guess around it.
 
-## Google sign-in (one-time setup, done by the owner)
+## 统一账户接入（先部署配套接口，再发布 BookHill）
 
-Google sign-in is pure front-end: Google Identity Services issues a short-lived access
-token in the browser, and each user's data lives in **their own** Google Drive, in a
-visible `langLSRW/` folder (`langlsrw-data.json` for history/settings/AI cache/progress,
-`libraries/*.tsv` for sentence libraries). You cannot see other users' data, and nothing
-is stored on vpsde. Until a client ID is configured the button is shown disabled and
-local (guest) users work as before.
+完整操作见 [ACCOUNT_INTEGRATION.md](../docs/ACCOUNT_INTEGRATION.md)。BookHill 使用独立 Kanidm public client `bookhill`，精确回调 `https://lang.mltz.tech/`，S256 PKCE / ES256 / `openid email profile`。账户中心先部署 `/api/integrations/bookhill/google-link`（仅正式站点 CORS），再配置客户端、测试、发布 BookHill。当前门户 Google/TOTP 会话不会自动登录 Kanidm OIDC。
+
+保留下面原 BookHill Google Cloud 项目的 OAuth client ID、Picker Key、项目编号和文件路径。Google 授权只为已在账户中心绑定同一 Google 的用户提供 Drive/Sheets 功能；无绑定不能同步。不要把 IDM 的 Google secret 放进前端，不要直接换成另一个项目的 client ID。
+
+CI 先 `npm ci --ignore-scripts` 安装测试依赖；浏览器运行 oauth4webapi 3.8.8 的本地 vendor，无构建步骤。`npm run vendor:oauth` 可以重现 vendor 文件。部署仍仅同步 index.html/src，不把文档、依赖或用户数据部署到 BookHill。
+
+## Google 云盘授权（保留原项目；新站点首次配置参考）
+
+Google Drive authorization is browser-only: GIS issues a short-lived token after the
+IDM account's binding has been checked. It does not authenticate the BookHill account.
+Learning data lives in the user's own `langLSRW/langlsrw-userdata.json` and
+`langLSRW/libraries/*.tsv`; the BookHill server stores no learning data.
 
 1. <https://console.cloud.google.com/> → create a project (e.g. `langLSRW`).
 2. APIs & Services → Library → enable **Google Drive API**.

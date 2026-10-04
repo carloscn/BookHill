@@ -100,7 +100,8 @@
 
   async function flush() {
     clearTimeout(flushTimer);
-    if (!persistent || !pending.size) return;
+    if (!persistent) return false;
+    if (!pending.size) return true;
     const records = [...pending.values()];
     pending.clear();
     try {
@@ -113,12 +114,14 @@
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });
+      return pending.size === 0;
     } catch (error) {
       records.forEach((record) => {
         if (!pending.has(`${record.identity}\u0002${record.id}`)) pending.set(`${record.identity}\u0002${record.id}`, record);
       });
       console.error("个人数据保存失败", error);
       scheduleFlush();
+      return false;
     }
   }
 
@@ -134,7 +137,7 @@
     scheduleFlush();
   }
 
-  // Opens an identity ("local:<name>", "cloud:<id>", or "guest") and loads its records into memory.
+  // Opens an identity ("local:<name>", "idm:<sub>", legacy "cloud:<id>", or "guest").
   async function open(identityId) {
     await flush();
     identity = String(identityId || "guest");
@@ -197,9 +200,9 @@
 
   // The whole identity as a portable document: { format, version, exportedAt, identity, global, languages }.
   // Each collection maps key -> [value, updatedAt]; deleted records are kept as [null, updatedAt, 1].
-  function exportDocument(meta = {}) {
+  function portableDocument(records, meta = {}) {
     const document = { format: FORMAT, version: FORMAT_VERSION, exportedAt: Date.now(), identity: meta.identity || { id: identity }, global: {}, languages: {} };
-    cache.forEach((record) => {
+    records.forEach((record) => {
       if (!isPortable(record.collection)) return;
       const target = record.scope === "global"
         ? document.global
@@ -208,6 +211,16 @@
       collection[record.key] = record.deleted ? [null, record.updatedAt, 1] : [record.value, record.updatedAt];
     });
     return document;
+  }
+
+  function exportDocument(meta = {}) {
+    return portableDocument(cache, meta);
+  }
+
+  // Reads an old identity without opening it or changing the current in-memory identity.
+  async function exportIdentity(identityId) {
+    await flush();
+    return portableDocument(await readIdentity(identityId), { identity: { id: identityId } });
   }
 
   function documentRecords(document) {
@@ -301,6 +314,7 @@
     append,
     flush,
     exportDocument,
+    exportIdentity,
     importDocument,
     isDocument,
     deleteIdentity,

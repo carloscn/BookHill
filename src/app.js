@@ -453,13 +453,14 @@ const fallbackSentences = [
     const userData = window.langLSRWUserData;
 
     function userDataIdentity() {
-      if (state.cloudUser?.id) return `cloud:${state.cloudUser.id}`;
+      if (state.cloudUser?.id) return `idm:${state.cloudUser.id}`;
       if (state.currentUser) return `local:${state.currentUser}`;
       return "guest";
     }
 
     function userDataIdentityMeta() {
-      if (state.cloudUser?.id) return { type: "cloud", id: state.cloudUser.id, name: cloudDisplayName() };
+      if (state.cloudUser?.id) return { type: "idm", id: state.cloudUser.id, name: cloudDisplayName(),
+        googleSub: idmAuth.binding?.google?.sub || "" };
       if (state.currentUser) return { type: "local", name: state.currentUser };
       return { type: "guest" };
     }
@@ -809,31 +810,37 @@ const fallbackSentences = [
     }
 
     // ---- Google sign-in + Drive sync (src/google-drive.js, src/cloud-sync.js) ----------------------------------
-    // A Google account is the identity "cloud:<sub>". Its records and libraries live in this browser like any
+    // An IDM account is the identity "idm:<sub>". Its records and libraries live in this browser like any
     // identity's, and are mirrored to the user's own Drive: langLSRW/langlsrw-userdata.json (the personal data
     // document, merged record by record, newer wins) and langLSRW/libraries/*.tsv. Nothing is kept on our server.
     // Google's token model needs a click to (re)connect, so after a reload sync waits for 「立即同步」.
     const googleDrive = window.langLSRWGoogleDrive;
+    const idmAuth = window.langLSRWIdmAuth;
+    const idmPolicy = window.langLSRWIdmPolicy;
     const cloudSync = window.langLSRWCloudSync;
     const cloud = { running: null, timer: 0, due: 0, again: false, status: "" };
     const CLOUD_SYNC_DELAY = 8000;
 
     function cloudDisplayName(user = state.cloudUser) {
       if (!user) return "";
-      return String(user.name || user.email || "Google 用户");
+      return String(user.name || user.email || "统一账户用户");
     }
 
     function renderCloudAuthState(message = "") {
-      const configured = googleDrive.isConfigured();
+      const configured = Boolean(idmAuth);
       const signedIn = Boolean(state.cloudUser);
+      const linked = Boolean(idmPolicy.linkedSubject(idmAuth.binding, state.cloudUser?.id));
       if (message) cloud.status = message;
       $("cloudUserMenuSection").hidden = !signedIn;
       $("localUserMenuSection").hidden = signedIn || !state.currentUser;
       $("googleLoginBtn").disabled = !configured || signedIn;
       $("cloudLogoutBtn").disabled = !signedIn;
-      $("syncCloudBtn").disabled = !signedIn || Boolean(cloud.running);
+      $("syncCloudBtn").disabled = !signedIn || !linked || Boolean(cloud.running);
+      $("connectDriveBtn").disabled = !signedIn || Boolean(cloud.running);
+      $("googleBindingStatus").textContent = !signedIn ? "未登录统一账户" : linked
+        ? `已绑定 Google：${idmAuth.binding.google.email || "已验证"}` : "尚未确认 Google 绑定；请先到账户中心绑定，再检查连接";
       $("clearUserBtn").disabled = signedIn || !state.currentUser;
-      $("clearUserBtn").title = signedIn ? "请先退出 Google 登录" : "删除当前浏览器中的本机用户和练习记录";
+      $("clearUserBtn").title = signedIn ? "请先退出统一账户" : "删除当前浏览器中的本机用户和练习记录";
       $("cloudLoginStatus").textContent = signedIn
         ? `已登录：${cloudDisplayName()}`
         : (message || (configured ? "" : "云登录未配置"));
@@ -926,6 +933,7 @@ const fallbackSentences = [
       const run = async () => {
         const identity = userDataIdentity();
         try {
+          const linked = await idmAuth.requireGoogleLink();
           if (!googleDrive.hasToken()) {
             if (!interactive) {
               renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
@@ -933,11 +941,16 @@ const fallbackSentences = [
             }
             await googleDrive.reconnect();
           }
+          if (identity !== userDataIdentity()) return;
           renderCloudAuthState("正在同步…");
           await userData.flush();
-          const changedLibraries = await syncLibraries(libraryOwner());
-          if (identity !== userDataIdentity()) return;
           const remote = await googleDrive.pull();
+          if (identity !== userDataIdentity()) return;
+          if (!idmPolicy.acceptsDocument(remote, state.cloudUser.id, linked.sub)) {
+            throw new Error("云盘中的学习数据属于其他账户；已停止同步，请先导出备份并联系管理员");
+          }
+          await migrateGoogleData(linked.sub);
+          const changedLibraries = await syncLibraries(libraryOwner());
           if (identity !== userDataIdentity()) return;
           let counts = { added: 0, updated: 0 };
           if (userData.isDocument(remote)) {
@@ -951,7 +964,7 @@ const fallbackSentences = [
           if (counts.added || counts.updated) refreshAfterUserDataChange();
           if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
           const local = userData.exportDocument({ identity: userDataIdentityMeta() });
-          if (!cloudSync.sameDocument(local, remote)) await googleDrive.push(local);
+          if (!cloudSync.sameDocument(local, remote) || remote?.identity?.type !== "idm") await googleDrive.push(local);
           state.cloudLastSyncedAt = new Date().toISOString();
           const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
           renderCloudAuthState(`已同步 · ${time}`);
@@ -996,10 +1009,11 @@ const fallbackSentences = [
       }, delay);
     }
 
-    function completeCloudSignOut(message = "已退出 Google") {
+    function completeCloudSignOut(message = "已退出统一账户") {
       clearTimeout(cloud.timer);
       cloud.timer = 0;
       googleDrive.signOut();
+      idmAuth.clear();
       state.cloudUser = null;
       state.cloudLastSyncedAt = "";
       state.currentUser = "";
@@ -1011,7 +1025,7 @@ const fallbackSentences = [
       showLogin();
     }
 
-    // Opens the Google identity. `carry` (optional) is the previous local identity's data to copy in.
+    // Opens the IDM identity. `carry` (optional) copies the previous local identity's data.
     async function activateCloudUser(profile, carry = null) {
       state.cloudUser = { id: profile.sub, email: profile.email || "", name: profile.name || "" };
       state.currentUser = "";
@@ -1030,7 +1044,7 @@ const fallbackSentences = [
       renderCloudAuthState();
     }
 
-    // Offers to copy the guest's / local user's libraries and records into the Google account being signed in.
+    // Offers a non-destructive copy of offline data to the authenticated IDM identity.
     async function dataToCarryIntoCloud(profile) {
       if (state.cloudUser) return null;
       const label = state.currentUser || "游客";
@@ -1041,28 +1055,50 @@ const fallbackSentences = [
       if (!libraries.length && !recordCount) return null;
       const parts = [libraries.length ? `${libraries.length} 个句库` : "", recordCount ? `${recordCount} 条学习记录` : ""].filter(Boolean).join("和");
       const ok = await showAppConfirm(
-        `把「${label}」在本机的${parts}一起导入 Google 账号（${profile.email || profile.name}）吗？句库会上传到你的 Google Drive；本机的「${label}」保持不变。`,
+        `把「${label}」在本机的${parts}复制到统一账户（${profile.email || profile.name}）吗？绑定 Google 并连接云盘后才会同步；本机的「${label}」保持不变。`,
         { title: "导入本机数据", okText: "一起导入", cancelText: "不用" }
       );
       return ok ? { document: recordCount ? document : null, libraries } : null;
     }
 
-    async function initializeCloudAuth() {
-      renderCloudAuthState();
-      const profile = googleDrive.isConfigured() ? googleDrive.getProfile() : null;
-      if (!profile || state.currentUser) return;
-      await activateCloudUser(profile);
-      renderCloudAuthState("未连接：点「立即同步」连接 Google Drive");
+    async function migrateGoogleData(googleSub) {
+      const owner = userDataIdentity();
+      const marker = `langLSRWIdmMigration:${state.cloudUser.id}:${googleSub}`;
+      if (localStorage.getItem(marker)) return;
+      if (!userData.persistent) throw new Error("浏览器存储不可用，旧数据迁移和同步已暂停");
+      const legacyOwner = `cloud:${googleSub}`;
+      userData.importDocument(await userData.exportIdentity(legacyOwner));
+      for (const source of [legacyOwner, `google:${googleSub}`]) {
+        for (const { user: _owner, count: _count, ...library } of await libraryStore.list(source)) {
+          const existing = await libraryStore.get(owner, library.id);
+          if (!existing || String(existing.updatedAt) < String(library.updatedAt)) {
+            await libraryStore.put(owner, { language: "en", ...library });
+          }
+        }
+      }
+      const tombstones = [...new Set([...loadLibraryTombstones(owner), ...loadLibraryTombstones(legacyOwner)])];
+      localStorage.setItem(libraryTombstoneKey(owner), JSON.stringify(tombstones));
+      if (!await userData.flush()) throw new Error("旧数据尚未保存到本机，迁移和同步已暂停，请重试");
+      localStorage.setItem(marker, "1");
+      refreshAfterUserDataChange();
     }
 
-    // Runs from the login button's click: Google opens its popup.
-    async function signInWithGoogle() {
-      renderCloudAuthState("正在连接 Google…");
+    async function initializeCloudAuth() {
+      renderCloudAuthState();
+      const result = await idmAuth.ready;
+      if (result.error) { renderCloudAuthState(`登录失败：${result.error.message}`); return; }
+      if (!result.user) return;
+      const carry = await dataToCarryIntoCloud(result.user);
+      await activateCloudUser(result.user, carry);
+      try { await idmAuth.googleLink(); } catch (error) { renderCloudAuthState(error.message); return; }
+      renderCloudAuthState("已登录；连接已绑定的 Google 云盘后可同步");
+    }
+
+    // Runs from the login button's click: redirect to the identity provider.
+    async function signInWithIdm() {
+      renderCloudAuthState("正在前往统一账户登录…");
       try {
-        const profile = await googleDrive.signIn({ selectAccount: true });
-        const carry = await dataToCarryIntoCloud(profile);
-        await activateCloudUser(profile, carry);
-        await syncWithCloud();
+        await idmAuth.startLogin();
       } catch (error) {
         renderCloudAuthState(`登录失败：${error.message || error}`);
       }
@@ -1071,6 +1107,16 @@ const fallbackSentences = [
     async function signOutCloudUser() {
       if (cloud.running) await cloud.running.catch(() => {});
       completeCloudSignOut();
+      idmAuth.logout();
+    }
+
+    async function connectGoogleDrive() {
+      try {
+        await googleDrive.signIn({ selectAccount: true });
+        await syncWithCloud();
+      } catch (error) {
+        renderCloudAuthState(error.message);
+      }
     }
 
     function normalizeSentenceItem(item) {
@@ -1281,6 +1327,7 @@ const fallbackSentences = [
         clearTimeout(cloud.timer);
         cloud.timer = 0;
         googleDrive.signOut();
+        idmAuth.clear();
         state.cloudUser = null;
         state.cloudLastSyncedAt = "";
         cloud.status = "";
@@ -1536,7 +1583,8 @@ const fallbackSentences = [
 
     function libraryMetaText(library) {
       const translated = library.items.filter((item) => item.translation).length;
-      const where = state.cloudUser ? (library.driveFileId ? " · 已存到 Google Drive" : " · 等待同步到 Google Drive") : " · 仅保存在本机";
+      const where = state.cloudUser && idmAuth.binding?.google
+        ? (library.driveFileId ? " · 已存到 Google Drive" : " · 连接云盘后同步") : " · 仅保存在本机";
       return `${library.items.length.toLocaleString()} 句 · ${translated.toLocaleString()} 句有翻译${library.source ? ` · 来源 ${library.source}` : ""}${where}`;
     }
 
@@ -1719,10 +1767,10 @@ const fallbackSentences = [
       $("importAppendSelect").disabled = target !== "append";
       $("importDuplicateOptions").disabled = target !== "append";
       $("importDriveNote").textContent = words
-        ? (state.cloudUser ? "词表随你的学习数据一起同步到你的 Google Drive。" : "词表保存在这台设备的浏览器里；用 Google 登录后会随学习数据同步到你的 Google Drive。")
+        ? "词表先保存在本机；登录统一账户并绑定、连接 Google 后，才会同步到你的 Google Drive。"
         : state.cloudUser
         ? `导入后会自动备份到你的 Google Drive「langLSRW/libraries」${googleDrive.hasToken() ? "" : "（当前未连接，点用户菜单里的「立即同步」后上传）"}。`
-        : "句库只保存在这台设备的浏览器里；用 Google 登录后可以同步到你自己的 Google Drive。";
+        : "句库只保存在这台设备的浏览器里；登录统一账户并绑定、连接 Google 后可以同步到你自己的 Google Drive。";
       $("confirmImportBtn").disabled = !items.length;
     }
 
@@ -1866,7 +1914,7 @@ const fallbackSentences = [
 
     async function importFromSheet() {
       if (!state.cloudUser) {
-        alert("从 Google 表格导入需要先用 Google 登录。");
+        alert("从 Google 表格导入需要登录统一账户并绑定 Google。");
         return;
       }
       const value = $("sheetUrlInput").value.trim();
@@ -1901,7 +1949,7 @@ const fallbackSentences = [
       const library = state.libraries.find((item) => item.id === id);
       if (!library?.sheet) return;
       if (!state.cloudUser) {
-        alert("从表格更新需要先用 Google 登录。");
+        alert("从表格更新需要登录统一账户并绑定 Google。");
         return;
       }
       $("librarySheetUpdateBtn").disabled = true;
@@ -2048,7 +2096,7 @@ const fallbackSentences = [
       const list = wordList(wordListId($("dictionaryCategorySelect").value));
       $("wordListManage").hidden = !list;
       $("wordListSheetUpdateBtn").hidden = !list?.sheet;
-      $("wordListSheetBtn").title = state.cloudUser ? "从 Google 表格导入词表" : "从 Google 表格导入词表（需要先用 Google 登录）";
+      $("wordListSheetBtn").title = state.cloudUser ? "从 Google 表格导入词表" : "从 Google 表格导入词表（需要登录统一账户并绑定 Google）";
     }
 
     function saveWordList(list) {
@@ -2118,7 +2166,7 @@ const fallbackSentences = [
 
     async function importWordListFromSheet() {
       if (!state.cloudUser) {
-        alert("从 Google 表格导入需要先用 Google 登录。");
+        alert("从 Google 表格导入需要登录统一账户并绑定 Google。");
         return;
       }
       $("wordListSheetBtn").disabled = true;
@@ -2145,7 +2193,7 @@ const fallbackSentences = [
       const list = wordList(wordListId($("dictionaryCategorySelect").value));
       if (!list?.sheet) return;
       if (!state.cloudUser) {
-        alert("从表格更新需要先用 Google 登录。");
+        alert("从表格更新需要登录统一账户并绑定 Google。");
         return;
       }
       $("wordListSheetUpdateBtn").disabled = true;
@@ -10159,7 +10207,9 @@ ${orderNote}`;
       "wordMasteryRepsInput"
     ].forEach((id) => $(id).addEventListener("change", savePracticeSettings));
     $("resetPracticeSettingsBtn").addEventListener("click", resetPracticeSettings);
-    $("googleLoginBtn").addEventListener("click", signInWithGoogle);
+    $("googleLoginBtn").addEventListener("click", signInWithIdm);
+    $("connectDriveBtn").addEventListener("click", connectGoogleDrive);
+    $("cloudExportDataBtn").addEventListener("click", exportData);
     $("syncCloudBtn").addEventListener("click", pushCloudState);
     $("cloudLogoutBtn").addEventListener("click", signOutCloudUser);
     $("dictionarySettingsList").addEventListener("click", (event) => {

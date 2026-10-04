@@ -6,7 +6,7 @@
 
 ![langLSRW practice view](docs/screenshot.png)
 
-langLSRW is a static web app with no backend for user data. Everything a learner creates belongs to them. Signed-in users keep their data in their own Google Drive, and guests and local users keep it in the browser. The server hosts code and a stateless sentence parser, nothing else.
+langLSRW is a static web app with no backend for learning data. Sign in with the MLTZ account (Kanidm OIDC). Learning data stays in the browser; users who bind Google in the account centre and grant BookHill Drive access can also sync it to their own Google Drive. The BookHill server hosts code and a stateless sentence parser.
 
 The user interface is in Simplified Chinese. Button names below are translated.
 
@@ -45,7 +45,7 @@ The user interface is in Simplified Chinese. Button names below are translated.
 
 ## Getting started
 
-1. Open [lang.mltz.tech](https://lang.mltz.tech) and sign in with Google, or continue as a local user.
+1. Open [lang.mltz.tech](https://lang.mltz.tech) and sign in with your MLTZ account, or continue as a local user. To sync, bind Google in the account centre, then choose **Check binding and connect Drive** in BookHill. Account login and Drive authorization are separate.
 2. Download what you need from the [data release](https://github.com/carloscn/BookHill/releases/tag/dictionaries-2026.10):
    - **Dictionaries:** install with Settings → 本地词典 → 从文件安装.
    - **Sentence libraries:** import with 句库 → 导入.
@@ -77,11 +77,11 @@ A library or word list imported from a Google Sheet remembers its source. Choose
 
 | What | Where |
 |---|---|
-| Libraries, word lists, favourites, review progress, settings | the browser (IndexedDB). For Google users it is also kept in a visible `langLSRW/` folder in their Drive: `langlsrw-userdata.json` plus `libraries/*.tsv` |
+| Libraries, word lists, favourites, review progress, settings | the browser (IndexedDB), under the stable IDM subject. After verified Google binding and Drive authorization, also in `langLSRW/langlsrw-userdata.json` and `langLSRW/libraries/*.tsv` in the user's own Drive |
 | Dictionaries | the browser's private file system (OPFS), installed from a downloaded file |
 | AI API key | the browser only, encrypted (see below). It is never exported or synced |
 
-Google access uses the least-privileged `drive.file` scope: the app only sees files it created, or spreadsheets you pick. Local users can export and import a JSON backup.
+Google access uses the least-privileged `drive.file` scope: the app only sees files it created, or spreadsheets you pick. Unbound users cannot sync or read Google Sheets. The original BookHill Google client and file paths remain in use; verified legacy Google data is copied without deleting the old browser copy. AI keys must be entered again for the new identity. See [account integration and rollout](docs/ACCOUNT_INTEGRATION.md).
 
 ## Security of your API key
 
@@ -104,7 +104,7 @@ The app is plain static files:
 python3 -m http.server 8849
 ```
 
-Open <http://localhost:8849/>. Local users work immediately. Google sign-in needs the origin added to the OAuth client; see [`deploy/README.md`](deploy/README.md). On localhost, sentence components use the production parser, which allows localhost through CORS.
+Open <http://localhost:8849/>. Local users work immediately. Production account/Drive integration is restricted to the registered site; see [`deploy/README.md`](deploy/README.md) and [`docs/ACCOUNT_INTEGRATION.md`](docs/ACCOUNT_INTEGRATION.md). On localhost, sentence components use the production parser, which allows localhost through CORS.
 
 ## Project structure
 
@@ -116,7 +116,9 @@ src/
   library-import.js         Import parsing and de-duplication (pure, tested)
   passage.js                Passage splitting for the reading page (pure, tested)
   library-store.js          Sentence libraries in IndexedDB
-  google-drive.js           Google sign-in, Drive files, Picker, Sheets API
+  idm-auth.js               Public Kanidm OIDC code/PKCE login and Google binding lookup
+  idm-policy.js             Identity boundaries for Drive data and migration
+  google-drive.js           Verified Google Drive authorization, files, Picker, Sheets API
   cloud-sync.js             Drive sync rules (pure, tested)
   secret-store.js           API-key encryption (pure, tested)
   syntax-tree.js            Dependency parse -> sentence components (pure, tested)

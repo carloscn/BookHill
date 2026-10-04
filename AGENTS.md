@@ -33,6 +33,7 @@ langLSRW: a static web app for practising English and Spanish (dictation, speaki
    - Google sign-in works only on origins registered for the OAuth client.
 3. **Test before every commit:**
    ```bash
+   npm ci --ignore-scripts
    node --test tests/*.test.js .agents/skills/*/scripts/*.test.js
    for f in $(find src -name '*.js' -not -path 'src/vendor/*'); do node --check "$f"; done
    node .agents/skills/langlsrw-traditional-grammar-analysis/scripts/build-web-prompt.js --check

@@ -9,6 +9,7 @@
        its sha256 here (tests/csp.test.js prints the new value). -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-acsLtGe8M7mz8+mRLepEAE0+u3M2D3wBX2sw+fUP4CA=' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; worker-src 'self'; frame-src https://accounts.google.com https://docs.google.com https://drive.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>langLSRW</title>
+  <meta name="idm-issuer" content="https://idm.mltz.tech/oauth2/openid/bookhill">
   <!-- Public OAuth client ID (Google sign-in + Drive) and browser API key for the Sheets Picker; both are restricted to this site's origins. -->
   <meta name="google-client-id" content="180213407454-r5uujgmro3f0o8opcens160nkrn3s85q.apps.googleusercontent.com">
   <!-- Free sentence-component parser (spaCy, services/parser) behind nginx on the same origin. -->
@@ -34,7 +35,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261002-5">
+  <link rel="stylesheet" href="src/styles.css?v=20261004-2">
 
 </head>
 <body data-active-page="listenPage">
@@ -43,14 +44,15 @@
       <h1>langLSRW</h1>
       <div class="login-options">
         <section class="login-option" aria-labelledby="cloudLoginTitle">
-          <h2 id="cloudLoginTitle" class="login-option-description">登录账号·云端同步</h2>
+          <h2 id="cloudLoginTitle" class="login-option-description">统一账户·云端同步</h2>
           <div class="login-option-content cloud-login-content">
             <button id="googleLoginBtn" class="google-login-button" type="button" disabled>
-              <span class="google-mark" aria-hidden="true">G</span>
-              使用 Google 登录
+              <span class="google-mark" aria-hidden="true">M</span>
+              使用 MLTZ 账户登录
             </button>
-            <div id="cloudLoginStatus" class="cloud-login-status" aria-live="polite">尚未配置云登录</div>
-            <div class="small-note cloud-login-note">句库、收藏、背词进度和设置保存在你自己的 Google Drive「langLSRW」文件夹，服务器不保存任何数据。</div>
+            <div id="cloudLoginStatus" class="cloud-login-status" aria-live="polite">正在检查登录状态</div>
+            <div class="small-note cloud-login-note">登录后可学习；到账户中心绑定 Google 并授权云盘，才能同步词库。学习数据保存在本机和你自己的 Google Drive，服务器不保存学习数据。</div>
+            <a href="https://idm.mltz.tech/register" target="_blank" rel="noopener noreferrer">注册统一账户</a>
           </div>
         </section>
         <div class="login-choice-or" aria-hidden="true">or</div>
@@ -116,9 +118,13 @@
             <section id="cloudUserMenuSection" class="account-menu-section" hidden>
               <div class="account-menu-title">登录账户</div>
               <div id="cloudAccountStatus" class="cloud-account-status">未登录云账号</div>
-              <button id="cloudLogoutBtn" type="button" disabled>退出 Google</button>
-              <div class="small-note">数据保存在你自己的 Google Drive「langLSRW」文件夹，修改后自动同步。刷新页面后需要点一次「立即同步」重新连接。</div>
+              <div id="googleBindingStatus" class="small-note" aria-live="polite">正在检查 Google 绑定</div>
+              <a href="https://idm.mltz.tech/account" target="_blank" rel="noopener noreferrer">管理账户 / 绑定 Google</a>
+              <button id="connectDriveBtn" type="button">检查绑定并连接云盘</button>
+              <button id="cloudLogoutBtn" type="button" disabled>退出统一账户</button>
+              <div class="small-note">绑定 Google 并连接云盘后，修改会自动同步。刷新后需重新登录，云盘授权只在当前页面内有效。</div>
               <button id="syncCloudBtn" type="button" disabled>立即同步</button>
+              <button id="cloudExportDataBtn" type="button">导出学习数据备份</button>
             </section>
             <section id="localUserMenuSection" class="account-menu-section" hidden>
               <div class="account-menu-title">本机用户</div>
@@ -422,7 +428,7 @@
             <div class="sheet-import-title">从 Google 表格导入</div>
             <input id="sheetUrlInput" type="text" placeholder="粘贴 Google 表格链接（可不填，直接选择）" aria-label="Google 表格链接">
             <button id="sheetImportBtn" type="button">选择 Google 表格</button>
-            <div class="sheet-import-guest small-note">从 Google 表格导入：需要先用 Google 登录。</div>
+            <div class="sheet-import-guest small-note">从 Google 表格导入：需要登录统一账户并绑定 Google。</div>
             <div class="small-note">每行一句，一列句子、一列翻译；导入后可以随时「从表格更新」。</div>
           </div>
           <label>
@@ -763,7 +769,7 @@
             <span class="word-list-actions-label">我的词表：</span>
             <button id="wordListImportBtn" type="button" title="从 txt / tsv 导入词表：每行一个词，可以用「|」或 Tab 带上释义">＋ 导入文件</button>
             <input id="wordListFileInput" type="file" accept=".txt,.tsv,text/plain,text/tab-separated-values" hidden>
-            <button id="wordListSheetBtn" type="button" title="从 Google 表格导入词表（需要 Google 登录）">从 Google 表格导入</button>
+            <button id="wordListSheetBtn" type="button" title="从 Google 表格导入词表（需要统一账户及 Google 绑定）">从 Google 表格导入</button>
             <span id="wordListManage" class="word-list-manage" hidden>
               <button id="wordListSheetUpdateBtn" type="button" hidden title="重新读取来源表格，新词追加进来，释义有变化的会合并">从表格更新</button>
               <button id="wordListRenameBtn" type="button">重命名</button>
@@ -978,7 +984,9 @@
   <div id="dictionaryLookupPopover" class="dictionary-lookup-popover" role="dialog" aria-label="单词查询" hidden></div>
   <div id="englishLookupPopover" class="dictionary-lookup-popover english-lookup-popover" role="dialog" aria-label="英语词典查询" hidden></div>
   <script src="src/cloud-sync.js?v=20261002-1"></script>
-  <script src="src/google-drive.js?v=20261002-1"></script>
+  <script src="src/idm-policy.js?v=20261004-2"></script>
+  <script src="src/idm-auth.js?v=20261004-2"></script>
+  <script src="src/google-drive.js?v=20261004-2"></script>
   <script src="src/generated/grammar-prompt.js?v=20260921-10"></script>
   <script src="src/secret-store.js?v=20261003-1"></script>
   <script src="src/syntax-tree.js?v=20261003-1"></script>
@@ -990,7 +998,7 @@
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20261002-2"></script>
-  <script src="src/app.js?v=20261002-6"></script>
+  <script src="src/user-data.js?v=20261004-2"></script>
+  <script src="src/app.js?v=20261004-3"></script>
 </body>
 </html>
