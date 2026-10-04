@@ -81,7 +81,7 @@ A library or word list imported from a Google Sheet remembers its source. Choose
 | Dictionaries | the browser's private file system (OPFS), installed from a downloaded file |
 | AI API key | the browser only, encrypted (see below). It is never exported or synced |
 
-Google access uses the least-privileged `drive.file` scope: the app only sees files it created, or spreadsheets you pick. Unbound users cannot sync or read Google Sheets. The original BookHill Google client and file paths remain in use; verified legacy Google data is copied without deleting the old browser copy. AI keys must be entered again for the new identity. See [account integration and rollout](docs/ACCOUNT_INTEGRATION.md).
+Google access uses the least-privileged `drive.file` scope: the app only sees files it created, or spreadsheets you pick. Unbound users cannot sync or read Google Sheets. The original BookHill Google client and file paths remain in use. A verified binding restores the old Google identity's browser word lists, passages, notes and libraries without deleting the old copy. To download cloud data, click **连接云盘并恢复数据** at the top after login; account-center Google login does not itself authorize Drive. Personal data sync completes before sentence-library sync, so a broken sentence file does not block word lists or passages. The status shows totals for both learning languages. Dictionary packages still need installation on each device. AI keys must be entered again for the new identity. See [account integration and rollout](docs/ACCOUNT_INTEGRATION.md).
 
 ## Security of your API key
 
@@ -116,7 +116,7 @@ src/
   library-import.js         Import parsing and de-duplication (pure, tested)
   passage.js                Passage splitting for the reading page (pure, tested)
   library-store.js          Sentence libraries in IndexedDB
-  idm-auth.js               Public Kanidm OIDC code/PKCE login and Google binding lookup
+  idm-auth.js               Account portal OIDC code/PKCE login and Google binding lookup
   idm-policy.js             Identity boundaries for Drive data and migration
   google-drive.js           Verified Google Drive authorization, files, Picker, Sheets API
   cloud-sync.js             Drive sync rules (pure, tested)

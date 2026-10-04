@@ -130,6 +130,8 @@ directory instead of vpsde — handy for checking the output.
 
 完整操作见 [ACCOUNT_INTEGRATION.md](../docs/ACCOUNT_INTEGRATION.md)。BookHill 使用账户门户的独立 issuer `https://idm.mltz.tech/auth/oidc/bookhill`，公开 client `bookhill`，精确回调 `https://lang.mltz.tech/`，S256 PKCE / ES256 / `openid email profile`。先部署 mltz-account v1.2.0 的 OIDC 桥接及绑定查询接口（仅正式站点 CORS），再发布 BookHill。Google / 门户 TOTP 完成后才发放应用授权码；用户名 / Passkey 经门户原有的 Kanidm 登录。nginx 现有 `/auth/` 和 `/api/` 已代理门户，不需改 nginx。
 
+v2.3.2 的数据恢复修复仅更新 BookHill 静态文件，无需改账户中心、Google 客户端或 nginx。上线后刷新并重新登录：核实绑定即恢复该 Google 身份的旧本机记录；点击上方「连接云盘并恢复数据」取得原 BookHill 项目的云盘授权，下载词表、课文和白板，再同步句库。验收查看同步状态、英 / 西词表和课文总数及语言切换；句库失败不应再阻断个人数据恢复。真实云盘验收仍需用户完成 Google 授权，离线词典安装包不随此同步下载。
+
 保留下面原 BookHill Google Cloud 项目的 OAuth client ID、Picker Key、项目编号和文件路径。Google 授权只为已在账户中心绑定同一 Google 的用户提供 Drive/Sheets 功能；无绑定不能同步。不要把 IDM 的 Google secret 放进前端，不要直接换成另一个项目的 client ID。
 
 CI 先 `npm ci --ignore-scripts` 安装测试依赖；浏览器运行 oauth4webapi 3.8.8 的本地 vendor，无构建步骤。`npm run vendor:oauth` 可以重现 vendor 文件。部署仍仅同步 index.html/src，不把文档、依赖或用户数据部署到 BookHill。

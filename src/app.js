@@ -620,7 +620,7 @@ const fallbackSentences = [
       const list = $("passageList");
       const passages = listPassages();
       const language = currentLearningLanguage();
-      $("passageLibraryNote").textContent = `当前是${language.label}。输入标题和正文，选择语言后保存。保存在这台设备上；登录 Google 后同步到你的 Google Drive。`;
+      $("passageLibraryNote").textContent = `当前是${language.label}。输入标题和正文，选择语言后保存。保存在这台设备上；登录统一账户并连接 Google 云盘后同步。`;
       if (!passages.length) {
         list.innerHTML = `<p class="read-empty">还没有${language.label}课文。</p>`;
         return;
@@ -847,6 +847,10 @@ const fallbackSentences = [
       $("cloudAccountStatus").textContent = signedIn
         ? `${cloudDisplayName()}${state.cloudUser.email && state.cloudUser.email !== cloudDisplayName() ? `（${state.cloudUser.email}）` : ""} · ${cloud.status || (googleDrive.hasToken() ? "已连接" : "未连接")}`
         : "未登录云账号";
+      $("cloudSyncNotice").hidden = !signedIn;
+      $("cloudSyncNoticeStatus").textContent = cloud.status || "尚未连接 Google 云盘，云端词表和课文还没有下载。";
+      $("connectDriveNoticeBtn").textContent = googleDrive.hasToken() ? "立即同步" : "连接云盘并恢复数据";
+      $("connectDriveNoticeBtn").disabled = !signedIn || Boolean(cloud.running);
       if (signedIn) $("userBadge").textContent = `用户：${cloudDisplayName()}`;
     }
 
@@ -932,6 +936,7 @@ const fallbackSentences = [
       cloud.timer = 0;
       const run = async () => {
         const identity = userDataIdentity();
+        let personalSynced = false;
         try {
           const linked = await idmAuth.requireGoogleLink();
           if (!googleDrive.hasToken()) {
@@ -943,14 +948,13 @@ const fallbackSentences = [
           }
           if (identity !== userDataIdentity()) return;
           renderCloudAuthState("正在同步…");
-          await userData.flush();
+          if (!await userData.flush()) throw new Error("学习数据尚未保存到本机，已停止同步，请重试");
           const remote = await googleDrive.pull();
           if (identity !== userDataIdentity()) return;
           if (!idmPolicy.acceptsDocument(remote, state.cloudUser.id, linked.sub)) {
             throw new Error("云盘中的学习数据属于其他账户；已停止同步，请先导出备份并联系管理员");
           }
           await migrateGoogleData(linked.sub);
-          const changedLibraries = await syncLibraries(libraryOwner());
           if (identity !== userDataIdentity()) return;
           let counts = { added: 0, updated: 0 };
           if (userData.isDocument(remote)) {
@@ -962,14 +966,23 @@ const fallbackSentences = [
             }
           }
           if (counts.added || counts.updated) refreshAfterUserDataChange();
-          if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
+          if (!await userData.flush()) throw new Error("下载的学习数据尚未保存到本机，已停止上传，请重试");
           const local = userData.exportDocument({ identity: userDataIdentityMeta() });
           if (!cloudSync.sameDocument(local, remote) || remote?.identity?.type !== "idm") await googleDrive.push(local);
+          if (identity !== userDataIdentity()) return;
+          personalSynced = true;
+          // A broken sentence-library file must not prevent word lists, passages or notes from loading.
+          const changedLibraries = await syncLibraries(libraryOwner());
+          if (identity !== userDataIdentity()) return;
+          if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
           state.cloudLastSyncedAt = new Date().toISOString();
           const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-          renderCloudAuthState(`已同步 · ${time}`);
+          const scopes = ["en", "es"];
+          const wordCount = scopes.reduce((sum, scope) => sum + userData.entries("wordList", scope).length, 0);
+          const passageCount = scopes.reduce((sum, scope) => sum + userData.entries("passage", scope).length, 0);
+          renderCloudAuthState(`已同步 · ${time} · ${wordCount} 个词表 / ${passageCount} 篇课文（英 / 西合计）`);
         } catch (error) {
-          renderCloudAuthState(error.code === "token_expired"
+          renderCloudAuthState(personalSynced ? `词表、课文和学习记录已同步；句库同步失败：${error.message || error}` : error.code === "token_expired"
             ? "连接已过期：点「立即同步」重新连接"
             : `同步失败：${error.message || error}`);
         }
@@ -1063,22 +1076,29 @@ const fallbackSentences = [
 
     async function migrateGoogleData(googleSub) {
       const owner = userDataIdentity();
-      const marker = `langLSRWIdmMigration:${state.cloudUser.id}:${googleSub}`;
+      const marker = `langLSRWIdmMigration:v2:${state.cloudUser.id}:${googleSub}`;
       if (localStorage.getItem(marker)) return;
       if (!userData.persistent) throw new Error("浏览器存储不可用，旧数据迁移和同步已暂停");
       const legacyOwner = `cloud:${googleSub}`;
-      userData.importDocument(await userData.exportIdentity(legacyOwner));
+      const ensureOwner = () => { if (owner !== userDataIdentity()) throw new Error("账户已变更，旧数据迁移已停止"); };
+      const legacy = await userData.exportIdentity(legacyOwner);
+      ensureOwner();
+      userData.importDocument(legacy);
       for (const source of [legacyOwner, `google:${googleSub}`]) {
         for (const { user: _owner, count: _count, ...library } of await libraryStore.list(source)) {
+          ensureOwner();
           const existing = await libraryStore.get(owner, library.id);
+          ensureOwner();
           if (!existing || String(existing.updatedAt) < String(library.updatedAt)) {
             await libraryStore.put(owner, { language: "en", ...library });
           }
         }
       }
+      ensureOwner();
       const tombstones = [...new Set([...loadLibraryTombstones(owner), ...loadLibraryTombstones(legacyOwner)])];
       localStorage.setItem(libraryTombstoneKey(owner), JSON.stringify(tombstones));
       if (!await userData.flush()) throw new Error("旧数据尚未保存到本机，迁移和同步已暂停，请重试");
+      ensureOwner();
       localStorage.setItem(marker, "1");
       refreshAfterUserDataChange();
     }
@@ -1090,8 +1110,14 @@ const fallbackSentences = [
       if (!result.user) return;
       const carry = await dataToCarryIntoCloud(result.user);
       await activateCloudUser(result.user, carry);
-      try { await idmAuth.googleLink(); } catch (error) { renderCloudAuthState(error.message); return; }
-      renderCloudAuthState("已登录；连接已绑定的 Google 云盘后可同步");
+      try {
+        const linked = await idmAuth.requireGoogleLink();
+        // The verified binding identifies the old browser data; Drive consent is only needed for cloud files.
+        await migrateGoogleData(linked.sub);
+        await tryLoadDefaultLibrary();
+        render();
+      } catch (error) { renderCloudAuthState(error.message); return; }
+      renderCloudAuthState("本机数据已载入。请连接 Google 云盘下载云端词表和课文。");
     }
 
     // Runs from the login button's click: redirect to the identity provider.
@@ -1117,6 +1143,10 @@ const fallbackSentences = [
       } catch (error) {
         renderCloudAuthState(error.message);
       }
+    }
+
+    function restoreCloudData() {
+      return googleDrive.hasToken() ? pushCloudState() : connectGoogleDrive();
     }
 
     function normalizeSentenceItem(item) {
@@ -3632,13 +3662,10 @@ const fallbackSentences = [
 
     // Applies the open identity's settings; missing ones start from the defaults.
     function applyIdentitySettings() {
-      const saved = (name) => userData.get("settings", name, "global");
+      const saved = (name) => userData.get("settings", name, "global") ?? defaultSettingValue(name);
       // A new identity learns English.
-      if (!LEARNING_LANGUAGES[saved("learningLanguage")]) userData.put("settings", "learningLanguage", "en", "global");
-      setLearningLanguage(saved("learningLanguage"), { persist: false, reloadLibrary: false });
-      IDENTITY_SETTING_NAMES.forEach((name) => {
-        if (saved(name) === undefined) userData.put("settings", name, defaultSettingValue(name), "global");
-      });
+      // Reading defaults must not create newer records that override imported/cloud settings.
+      setLearningLanguage(LEARNING_LANGUAGES[saved("learningLanguage")] ? saved("learningLanguage") : "en", { persist: false, reloadLibrary: false });
       applyTheme(saved("theme"), { persist: false });
       state.shortcuts = { ...defaultShortcuts, ...(saved("shortcuts") || {}) };
       state.speechSettings = { ...(saved("speech") || {}) };
@@ -10209,6 +10236,7 @@ ${orderNote}`;
     $("resetPracticeSettingsBtn").addEventListener("click", resetPracticeSettings);
     $("googleLoginBtn").addEventListener("click", signInWithIdm);
     $("connectDriveBtn").addEventListener("click", connectGoogleDrive);
+    $("connectDriveNoticeBtn").addEventListener("click", restoreCloudData);
     $("cloudExportDataBtn").addEventListener("click", exportData);
     $("syncCloudBtn").addEventListener("click", pushCloudState);
     $("cloudLogoutBtn").addEventListener("click", signOutCloudUser);

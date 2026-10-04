@@ -9,10 +9,10 @@ BookHill 仍为静态网页。Kanidm 保存用户和原生凭据；账户门户�
 ## 用户怎么使用
 
 1. 点击「使用 MLTZ 账户登录」，前往账户中心的「登录 BookHill」页，选择 Google 或用户名 / Passkey。若启用了门户 TOTP，验证完成后自动返回 BookHill；已有有效门户会话时直接继续。
-2. 返回 BookHill 即可使用本机学习功能。没有 Google 绑定时不能同步、导入或更新 Google 表格。
+2. 返回 BookHill 即可使用本机学习功能。v2.3.2 在核实 Google 绑定后直接复制该 Google 身份的旧本机词表、课文、白板和句库，不用等云盘授权；旧副本保留。没有 Google 绑定时不能读取旧 Google 身份的数据、同步、导入或更新 Google 表格。
 3. 用户菜单 →「管理账户 / 绑定 Google」，在账户中心确认并绑定自己的 Google 账户，然后返回 BookHill。
-4. 点击「检查绑定并连接云盘」，选择**同一个 Google 账户**并授予 `drive.file` 权限；未授权或选错账户会停止操作。
-5. 连接成功后同步词库、学习记录及设置；自动同步沿用原规则。刷新页面后重新点击统一账户登录（门户有会话时无需再次输入凭据），再连接云盘。应用令牌最长 15 分钟，不发 refresh token；过期时重新登录或授权。
+4. 点击页面上方「连接云盘并恢复数据」（用户菜单的连接按钮也可用），选择**同一个 Google 账户**并授予 `drive.file` 权限；未授权或选错账户会停止操作。账户中心的 Google 登录与 BookHill 的云盘授权是两步；前者完成不表示学习数据已下载。
+5. 连接成功后同步词表、课文、白板、学习记录及设置，再同步句库。上方显示同步状态和英 / 西合计的词表、课文数量；句库文件失败会单独报错，不阻断词表和课文的恢复。词典安装包仍保存在本设备，需要另行安装。自动同步沿用原规则。刷新页面后重新点击统一账户登录（门户有会话时无需再次输入凭据），再连接云盘。应用令牌最长 15 分钟，不发 refresh token；过期时重新登录或授权。
 6. 「退出统一账户」清除本页的两类令牌，并前往 IDM `/logout`。这不会撤销 Google 授权，也不会自动清掉其他应用的本地会话。
 
 **身份边界：**此桥接只服务 BookHill，不伪造 Kanidm 会话或签名。直接接入 Kanidm `/oauth2/openid/<client>` 的其他应用仍需要原生凭据。其他服务应建立自己的客户端，不能复用 `bookhill` client 或令牌。Google 会话与 Kanidm 原生会话仍独立。
@@ -47,7 +47,7 @@ BookHill 仍为静态网页。Kanidm 保存用户和原生凭据；账户门户�
 
 ```http
 GET https://idm.mltz.tech/api/integrations/bookhill/google-link
-Authorization: Bearer <BookHill 的 Kanidm access_token>
+Authorization: Bearer <BookHill 的门户 OIDC access_token>
 Origin: https://lang.mltz.tech
 ```
 
@@ -60,9 +60,10 @@ Origin: https://lang.mltz.tech
 ## 旧数据迁移与回退
 
 - 新本机命名空间为 `idm:<Kanidm sub>`，不按邮箱或用户名识别人；离线 `local:<name>` 和 `guest` 保留。
-- 验证 Google 授权账户后，首次同步把同一 Google 的 `cloud:<Google sub>` 个人数据，以及 `cloud:<Google sub>` / 更早的 `google:<Google sub>` 句库复制到 `idm:<sub>`；保留 `updatedAt`、英语/西语分区、删除墓碑、Drive 文件 ID。旧本机副本不删除；仅本机 AI 密钥不复制、不上传，需在新身份下重新填写。
+- 登录后核实服务端 Google 绑定，即把同一 Google 的 `cloud:<Google sub>` 个人数据，以及 `cloud:<Google sub>` / 更早的 `google:<Google sub>` 句库复制到 `idm:<sub>`；不请求 Drive。保留 `updatedAt`、英语/西语分区、删除墓碑、Drive 文件 ID。v2.3.2 使用 v2 迁移标记，已有 v1 标记也会重新按较新记录合并，补齐先前遗漏的删除记录；不覆盖统一身份下较新的学习修改。旧本机副本不删除；仅本机 AI 密钥不复制、不上传，需在新身份下重新填写。
+- 打开新身份时只读取默认设置，不创建比旧设置更新的记录；用户实际修改设置时才写入。这样旧学习语言等设置可正常迁移。已经由旧版本写入的设置仍遵守较新者优先，不强行覆盖。
 - 本机存储失效或未保存成功，不标记迁移完成、不继续同步。
-- 云盘目录和文件名保持 `langLSRW/langlsrw-userdata.json`、`langLSRW/libraries/*.tsv`。同步先读取并核对个人文档所属身份，匹配旧 Google 身份才接受迁移，匹配当前 IDM/Google 对才接受后续同步；属于其他 IDM 的文档或损坏文档会停止同步，先处理备份，避免覆盖。
+- 云盘目录和文件名保持 `langLSRW/langlsrw-userdata.json`、`langLSRW/libraries/*.tsv`。同步先读取并核对个人文档所属身份，匹配旧 Google 身份才接受云端数据，匹配当前 IDM/Google 对才接受后续同步；属于其他 IDM 的文档或损坏文档会停止同步，先处理备份，避免覆盖。本机写入不成功则停止上传；个人文档完成后才同步句库，句库失败显示部分成功状态。
 - 文档新 identity 为 `{type:"idm",id:"<idm-sub>",googleSub:"<google-sub>",name:"…"}`。记录格式仍为 v2，不迁移更早的 `langlsrw-data.json`。
 - 切换前备份 Google Drive 文件；回退时先停用新同步、导出当前学习数据并备份云盘，再恢复旧 BookHill 发布。旧代码不检查 IDM identity，不能新旧版本同时写同一云盘。账户中心接口是增量变更，可保留；`bookhill` 客户端可暂停其 scope-map 后恢复。
 - 现有同步仍非多设备事务：整份文档上传存在并发覆盖风险，本次没有解决此原有限制。首次切换用单设备，确认备份后再打开其他设备。

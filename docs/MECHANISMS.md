@@ -10,7 +10,7 @@ langLSRW 有两种相互独立的身份模式：
 
 - 云登录通过账户门户的 BookHill OIDC issuer 完成，可用 Google 或用户名 / Passkey；`sub` 仍为 Kanidm UUID，身份仍为 `idm:<sub>`。Google 云盘需要另行授权。
 - 本地用户由明确创建的本地用户名识别。
-- 统一账户和 Google 账号都不会按邮箱猜测身份。旧 `cloud:<Google sub>` 只在验证对应绑定和 Google 授权后复制到统一身份。
+- 统一账户和 Google 账号都不会按邮箱猜测身份。旧 `cloud:<Google sub>` 在验证服务端对应绑定后复制到统一身份；云端文件仍须另外取得对应 Google 授权。
 - 退出登录会清除当前云端身份，并返回用户选择。
 - 本地用户数据和云端账号数据使用不同的浏览器存储命名空间。
 
@@ -48,10 +48,11 @@ BookHill 服务器不保存学习数据。已绑定用户的数据保存在自�
 
 - 登录：`src/idm-auth.js` 使用固定版本 oauth4webapi 的 OIDC code + PKCE S256，核对 ES256 签名、state、nonce、iss、aud、exp 和 userinfo sub。令牌只在页面内存；刷新后重新登录。登录时可选择复制游客/本机数据。
 - 云盘：先查询账户中心 `/api/integrations/bookhill/google-link`，再 GIS 弹窗授权。核对 Google userinfo sub 与绑定一致、确实授予 drive.file 后才启用 Drive/Sheets；每个云盘请求前重查绑定。没有绑定、授权错账户、解绑、统一登录过期都停止同步。
-- 迁移：首次连接核对云盘文档所属身份，再复制同一 Google 旧本机记录、句库和墓碑到 `idm:<sub>`。保留旧本机副本和 Drive 文件 ID，排除 AI 密钥。损坏或其他账户的云盘文档停止同步。详细部署和 Google 两套客户端分工见 [ACCOUNT_INTEGRATION.md](ACCOUNT_INTEGRATION.md)。
+- 迁移：登录后核实绑定就复制同一 Google 旧本机记录、句库和墓碑到 `idm:<sub>`，不等待 Drive 授权。保留旧本机副本和 Drive 文件 ID，排除 AI 密钥；迁移过程中换身份则停止。v2 迁移标记会补跑已有 v1 标记的迁移，按时间合并并保留未见过的删除墓碑。下载云端文档仍先核对身份，损坏或其他账户的文档停止同步。详细部署和 Google 两套客户端分工见 [ACCOUNT_INTEGRATION.md](ACCOUNT_INTEGRATION.md)。
 - `langLSRW/langlsrw-userdata.json`：与备份导出相同的个人数据文档。同步时先下载、按记录合并（`userData.importDocument`，较新者胜出，墓碑同步删除），内容有变化时再上传（`cloudSync.sameDocument` 比较）。旧版 lang_srw 的 `langlsrw-data.json` 保持不动、不再读取。
 - `langLSRW/libraries/*.tsv`：每个句库一个文件，句库 id、语言、更新时间和来源表格放在文件的 `appProperties` 中；`cloudSync.planLibrarySync` 决定上传 / 下载 / 改名 / 删除，本机删除通过墓碑（`langLSRWLibraryTombstones:<身份>`）把 Drive 文件移到回收站。
 - 我的词表（`wordList` 记录）属于个人数据文档，随它同步。课文库（`passage`）和读页白板（`passageNote`）也在这份文档里，不另存文件。
+- 同步顺序与反馈：先恢复、保存并同步个人文档，再同步句库；本机保存失败停止上传，句库失败只报告句库问题。登录后上方始终显示连接状态和「连接云盘并恢复数据」/「立即同步」入口，成功时显示英 / 西合计词表和课文数量。账户中心 Google 登录不包含 BookHill 云盘授权。
 - 自动同步：个人数据变化后约 8 秒、导入或修改句库后约 0.5 秒（`scheduleCloudSync()` 保留最早的截止时间）；同步进行中再有变化会在结束后再同步一次。
 - 文档不包含词典、录音、其他身份的数据和 AI API 密钥。
 
