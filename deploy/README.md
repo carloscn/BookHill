@@ -128,7 +128,7 @@ directory instead of vpsde — handy for checking the output.
 
 ## 统一账户接入（先部署配套接口，再发布 BookHill）
 
-完整操作见 [ACCOUNT_INTEGRATION.md](../docs/ACCOUNT_INTEGRATION.md)。BookHill 使用独立 Kanidm public client `bookhill`，精确回调 `https://lang.mltz.tech/`，S256 PKCE / ES256 / `openid email profile`。账户中心先部署 `/api/integrations/bookhill/google-link`（仅正式站点 CORS），再配置客户端、测试、发布 BookHill。当前门户 Google/TOTP 会话不会自动登录 Kanidm OIDC。
+完整操作见 [ACCOUNT_INTEGRATION.md](../docs/ACCOUNT_INTEGRATION.md)。BookHill 使用账户门户的独立 issuer `https://idm.mltz.tech/auth/oidc/bookhill`，公开 client `bookhill`，精确回调 `https://lang.mltz.tech/`，S256 PKCE / ES256 / `openid email profile`。先部署 mltz-account v1.2.0 的 OIDC 桥接及绑定查询接口（仅正式站点 CORS），再发布 BookHill。Google / 门户 TOTP 完成后才发放应用授权码；用户名 / Passkey 经门户原有的 Kanidm 登录。nginx 现有 `/auth/` 和 `/api/` 已代理门户，不需改 nginx。
 
 保留下面原 BookHill Google Cloud 项目的 OAuth client ID、Picker Key、项目编号和文件路径。Google 授权只为已在账户中心绑定同一 Google 的用户提供 Drive/Sheets 功能；无绑定不能同步。不要把 IDM 的 Google secret 放进前端，不要直接换成另一个项目的 client ID。
 

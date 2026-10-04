@@ -1096,7 +1096,7 @@ const fallbackSentences = [
 
     // Runs from the login button's click: redirect to the identity provider.
     async function signInWithIdm() {
-      renderCloudAuthState("正在前往统一账户登录…");
+      renderCloudAuthState("正在前往账户中心，登录后自动返回 BookHill…");
       try {
         await idmAuth.startLogin();
       } catch (error) {
