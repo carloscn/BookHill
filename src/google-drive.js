@@ -30,6 +30,9 @@
   let tokenExpiresAt = 0;
   let fileId = "";
   let folders = {};
+  let authorizedSub = "";
+  let authorizedIdmSub = "";
+  let generation = 0;
 
   function clientId() {
     return document.querySelector('meta[name="google-client-id"]')?.content.trim() || "";
@@ -79,10 +82,7 @@
           pending.reject(new Error(response.error_description || response.error));
           return;
         }
-        accessToken = response.access_token;
-        // Renew a minute early so a request never races the expiry.
-        tokenExpiresAt = Date.now() + (Number(response.expires_in) - 60) * 1000;
-        pending.resolve(accessToken);
+        pending.resolve(response);
       },
       error_callback: (error) => {
         const pending = pendingToken;
@@ -99,22 +99,23 @@
   }
 
   // Must be called from a user gesture (click/keypress): GIS opens a popup.
-  async function requestToken({ selectAccount = false } = {}) {
+  async function requestToken({ selectAccount = false, email = "" } = {}) {
     if (!isConfigured()) throw new Error("尚未配置 Google Client ID。");
     await loadGis();
     const client = ensureTokenClient();
-    const profile = getProfile();
+    if (pendingToken) throw new Error("Google 授权正在进行，请稍候");
     return new Promise((resolve, reject) => {
       pendingToken = { resolve, reject };
       client.requestAccessToken({
-        prompt: selectAccount || !profile ? "select_account" : "",
-        hint: profile?.email || undefined
+        prompt: selectAccount ? "select_account" : "",
+        hint: email || undefined
       });
     });
   }
 
   function hasToken() {
-    return Boolean(accessToken) && Date.now() < tokenExpiresAt;
+    return Boolean(accessToken && authorizedSub && authorizedIdmSub === window.langLSRWIdmAuth?.user()?.sub)
+      && Date.now() < tokenExpiresAt;
   }
 
   function getProfile() {
@@ -127,15 +128,25 @@
   }
 
   async function api(url, options = {}) {
+    if (!["https://www.googleapis.com", "https://sheets.googleapis.com"].includes(new URL(url).origin)) {
+      throw new Error("云盘接口地址无效，已停止操作");
+    }
     if (!hasToken()) {
       const error = new Error("Google 连接已过期，请重新连接。");
       error.code = "token_expired";
       throw error;
     }
+    const expected = await window.langLSRWIdmAuth.requireGoogleLink();
+    if (!hasToken() || expected.sub !== authorizedSub) {
+      signOut();
+      throw new Error("Google 绑定已改变，请重新连接已绑定的账户");
+    }
+    const epoch = generation;
     const response = await fetch(url, {
       ...options,
       headers: { ...(options.headers || {}), Authorization: `Bearer ${accessToken}` }
     });
+    if (epoch !== generation || !hasToken()) throw new Error("账户已变更，请重新连接云盘");
     if (response.status === 401) {
       accessToken = "";
       const error = new Error("Google 连接已过期，请重新连接。");
@@ -160,8 +171,30 @@
   }
 
   async function signIn({ selectAccount = false } = {}) {
-    await requestToken({ selectAccount });
-    const info = await (await api("https://www.googleapis.com/oauth2/v3/userinfo")).json();
+    const epoch = ++generation;
+    accessToken = "";
+    authorizedSub = "";
+    const idmSub = window.langLSRWIdmAuth.user()?.sub;
+    const expected = await window.langLSRWIdmAuth.requireGoogleLink();
+    const response = await requestToken({ selectAccount, email: expected.email });
+    if (typeof response.access_token !== "string" || !response.access_token
+        || !Number.isFinite(Number(response.expires_in)) || Number(response.expires_in) <= 60) {
+      throw new Error("Google 授权无效，请重新连接");
+    }
+    if (!String(response.scope || "").split(/\s+/).includes("https://www.googleapis.com/auth/drive.file")) {
+      throw new Error("没有授予云盘文件权限，无法同步词库");
+    }
+    // Never use an unverified token for Drive/Sheets. Userinfo is the only permitted first request.
+    const infoResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${response.access_token}` }, credentials: "omit"
+    });
+    if (!infoResponse.ok) throw new Error("无法核实 Google 账户，请重新授权");
+    const info = await infoResponse.json();
+    const latest = await window.langLSRWIdmAuth.requireGoogleLink();
+    if (epoch !== generation || window.langLSRWIdmAuth.user()?.sub !== idmSub
+        || info.sub !== expected.sub || info.sub !== latest.sub) {
+      throw new Error("请选择统一账户已绑定的 Google 账户；本次未访问或同步云盘");
+    }
     const previous = getProfile();
     if (previous?.sub !== info.sub) {
       fileId = "";
@@ -174,12 +207,19 @@
       picture: info.picture || ""
     };
     localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+    authorizedSub = info.sub;
+    authorizedIdmSub = idmSub;
+    accessToken = response.access_token;
+    tokenExpiresAt = Date.now() + (Number(response.expires_in) - 60) * 1000;
     return profile;
   }
 
   // Forgets the session locally. Consent is not revoked, so signing in again
   // is one click; users can remove access at myaccount.google.com/permissions.
   function signOut() {
+    generation += 1;
+    authorizedSub = "";
+    authorizedIdmSub = "";
     accessToken = "";
     tokenExpiresAt = 0;
     fileId = "";
@@ -302,9 +342,11 @@
     if (!id) return null;
     const response = await api(`${DRIVE}/${id}?alt=media`, { cache: "no-store" });
     try {
-      return await response.json();
+      const document = await response.json();
+      if (!window.langLSRWUserData.isDocument(document)) throw new Error("invalid document");
+      return document;
     } catch {
-      return null;
+      throw new Error("云盘学习数据无法读取；已停止同步，请先备份原文件");
     }
   }
 
@@ -389,7 +431,9 @@
   // { id, name } or null when the user cancels.
   async function pickSpreadsheet(fileId = "") {
     if (!apiKey()) throw new Error("还没有配置 Google API 密钥（index.html 里的 google-api-key），见 deploy/README.md。");
-    if (!hasToken()) await requestToken();
+    if (!hasToken()) await signIn();
+    const expected = await window.langLSRWIdmAuth.requireGoogleLink();
+    if (!hasToken() || expected.sub !== authorizedSub) throw new Error("请重新连接已绑定的 Google 账户");
     await loadPicker();
     const { picker } = window.google;
     const view = new picker.DocsView(picker.ViewId.SPREADSHEETS).setMode(picker.DocsViewMode.LIST);
@@ -439,7 +483,7 @@
     getProfile,
     hasToken,
     signIn,
-    reconnect: () => requestToken(),
+    reconnect: () => signIn(),
     signOut,
     pull,
     push,

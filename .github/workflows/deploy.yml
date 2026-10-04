@@ -37,6 +37,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts
       - name: Unit tests
         run: |
           if compgen -G "tests/*.test.js" > /dev/null; then

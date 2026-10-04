@@ -1,6 +1,6 @@
 # langLSRW 机制
 
-最后更新：2026-10-03
+最后更新：2026-10-04（统一账户接入分支，生产切换见 ACCOUNT_INTEGRATION.md）
 
 本文档记录已实现产品行为的工作方式。它描述当前代码，而不是计划中的行为。每当触发条件、存储规则、身份边界、同步范围或部署机制发生变化时，都要更新本文档。
 
@@ -8,9 +8,9 @@
 
 langLSRW 有两种相互独立的身份模式：
 
-- Google 账号由其不可变的 Google 账号 ID（`sub`）识别，身份为 `cloud:<sub>`。
+- 云登录由 Kanidm OIDC 的稳定 `sub` 识别，身份为 `idm:<sub>`；Google 只负责已绑定用户的云盘授权。
 - 本地用户由明确创建的本地用户名识别。
-- Google 账号绝不会被转换成以邮箱命名的本地用户。
+- 统一账户和 Google 账号都不会按邮箱猜测身份。旧 `cloud:<Google sub>` 只在验证对应绑定和 Google 授权后复制到统一身份。
 - 退出登录会清除当前云端身份，并返回用户选择。
 - 本地用户数据和云端账号数据使用不同的浏览器存储命名空间。
 
@@ -33,7 +33,7 @@ langLSRW 有两种相互独立的身份模式：
 此机制的完整设计、数据列表和历史记录以中文维护在 [`USER_DATA.md`](USER_DATA.md)；两处要保持同步。
 
 - `src/user-data.js`（`window.langLSRWUserData`）把学习者的每一项数据作为记录 `{ identity, id, scope, collection, key, value, updatedAt, deleted }` 存入 IndexedDB 数据库 `langlsrw-userdata`（对象仓库 `records`，主键 `[identity, id]`，索引 `identity`）。已打开身份的记录会镜像到内存中，因此页面可以同步读取（`get`、`entries`）；`put`、`remove` 和 `append` 会立即更新内存，并在 300 ms 后用一个事务刷入数据库，在 `pagehide` 或页面隐藏时也会立即刷入。没有 IndexedDB 时，存储只在页面内存中工作。
-- 身份包括 `local:<name>`、`cloud:<Google sub>` 和 `guest`（`userDataIdentity()`）；作用域为 `global` 或学习语言 ID。`openUserData()` 会在启动、本地登录、云端登录、退出登录和删除用户时打开身份，然后应用其设置；调用方随后通过 `tryLoadDefaultLibrary()` 恢复其位置。
+- 身份包括 `local:<name>`、`idm:<Kanidm sub>` 和 `guest`（`userDataIdentity()`）；旧 `cloud:<Google sub>` 留作迁移副本。作用域为 `global` 或学习语言 ID。`openUserData()` 在身份变化时打开对应数据、应用设置，再恢复学习位置。
 - 注册表 `COLLECTIONS` 是读取、导出、导入、删除和同步共同使用的唯一列表：`settings`（全局）；每种语言的 `position`、`favoriteWord`、`favoriteSentence`、`wordProgress`、`grammarResult`，以及预留的 `sentenceProgress` 和 `customLibrary`；还有事件集合 `practiceEvent` 和 `reviewEvent`，它们标记为 `enabled: false`（目前没有任何代码读取它们，因此在有功能需要之前，它们既不会被写入、加载、导出，也不会被导入）。打开身份时，未注册或已禁用集合中的记录会被忽略。
 - 设置只按身份保存（`persistSetting()`、`applyIdentitySettings()`）：`learningLanguage`、`theme`、`shortcuts`、`speech`、`fonts`、`grammarColors`、`dictionaryAutoSpeak`、`practice`（每组新单词 / 句子数量）和 `ai`（AI 基础 URL 和模型）。除最后显示主题的缓存外，没有任何内容复制到 localStorage（`langLSRWBootTheme`，由 `applyTheme()` 写入，并由 `<body>` 顶部的内联脚本在渲染前应用）。`index.html` 也以 `html.is-booting` 开始，它会隐藏页面内容，直到启动流程应用了该身份的设置（或经过 1.5 s），因此不会闪现默认外观。`applyIdentitySettings()` 先切换到该身份的学习语言（不加载其句库，调用方接下来通过 `tryLoadDefaultLibrary()` 加载），用默认值补齐缺失设置（`defaultSettingValue()`），再应用其余设置；`恢复默认设置` 只重置当前身份。AI API 密钥按身份保存，但只保存在本设备：`localSecrets` 集合标记为 `exportable: false`，因此绝不会被导出、导入或同步。
 - `设置` 工具栏按钮打开 `#settingsModal`，这是一个居中的对话框，使用与 `词库` 相同的三列布局（`openSettings()` / `closeSettings()`；关闭、Esc 或点击背景会关闭它，打开期间学习快捷键会暂停）。左列列出分类（`data-settings-tab`：字体、快捷键、练习、AI 接口、本地词典、翻译缓存、句子成分颜色、设置管理）；`selectSettingsTab()` 在中列显示匹配的 `data-settings-panel`。中列每一行都是固定宽度名称加控件，因此控件和控件按钮会对齐；快捷键和语法颜色使用两列。右列（`renderSettingsDetail()`）显示分类标题和它的 `data-settings-intro`，以及指针下或聚焦中的控件的 `title`。面板淡入并滑入（`settings-panel-in`），行在悬停时获得浅色底色。所有控件 ID 都保持不变，因此保存和加载照旧工作。
@@ -44,9 +44,11 @@ langLSRW 有两种相互独立的身份模式：
 
 ## 云同步（Google Drive）
 
-服务器不保存任何用户数据。Google 账号的数据保存在该用户自己的 Google Drive 中一个可见的 `langLSRW/` 文件夹里（`drive.file` 权限：应用只能看到自己创建的文件和用户在选择器中选中的表格）。
+BookHill 服务器不保存学习数据。已绑定用户的数据保存在自己的 Google Drive 可见 `langLSRW/` 文件夹里（`drive.file` 权限：应用只能看到自己创建的文件和用户在选择器中选中的表格）。账户中心仅提供受 BookHill bearer token 保护的 Google 绑定查询。
 
-- 登录：Google Identity Services 令牌模式（`src/google-drive.js`），弹窗授权，令牌只在内存中、约一小时有效；刷新页面后需要点一次 `立即同步` 重新连接（Google 要求由点击触发）。登录时可以选择把游客 / 本机用户的句库和学习记录一起带入账号。
+- 登录：`src/idm-auth.js` 使用固定版本 oauth4webapi 的 OIDC code + PKCE S256，核对 ES256 签名、state、nonce、iss、aud、exp 和 userinfo sub。令牌只在页面内存；刷新后重新登录。登录时可选择复制游客/本机数据。
+- 云盘：先查询账户中心 `/api/integrations/bookhill/google-link`，再 GIS 弹窗授权。核对 Google userinfo sub 与绑定一致、确实授予 drive.file 后才启用 Drive/Sheets；每个云盘请求前重查绑定。没有绑定、授权错账户、解绑、统一登录过期都停止同步。
+- 迁移：首次连接核对云盘文档所属身份，再复制同一 Google 旧本机记录、句库和墓碑到 `idm:<sub>`。保留旧本机副本和 Drive 文件 ID，排除 AI 密钥。损坏或其他账户的云盘文档停止同步。详细部署和 Google 两套客户端分工见 [ACCOUNT_INTEGRATION.md](ACCOUNT_INTEGRATION.md)。
 - `langLSRW/langlsrw-userdata.json`：与备份导出相同的个人数据文档。同步时先下载、按记录合并（`userData.importDocument`，较新者胜出，墓碑同步删除），内容有变化时再上传（`cloudSync.sameDocument` 比较）。旧版 lang_srw 的 `langlsrw-data.json` 保持不动、不再读取。
 - `langLSRW/libraries/*.tsv`：每个句库一个文件，句库 id、语言、更新时间和来源表格放在文件的 `appProperties` 中；`cloudSync.planLibrarySync` 决定上传 / 下载 / 改名 / 删除，本机删除通过墓碑（`langLSRWLibraryTombstones:<身份>`）把 Drive 文件移到回收站。
 - 我的词表（`wordList` 记录）属于个人数据文档，随它同步。课文库（`passage`）和读页白板（`passageNote`）也在这份文档里，不另存文件。
