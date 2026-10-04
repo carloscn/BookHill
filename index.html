@@ -35,7 +35,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261004-2">
+  <link rel="stylesheet" href="src/styles.css?v=20261004-3">
 
 </head>
 <body data-active-page="listenPage">
@@ -141,6 +141,11 @@
         </details>
       </div>
     </header>
+
+    <section id="cloudSyncNotice" class="cloud-sync-notice" aria-label="云盘同步" hidden>
+      <span id="cloudSyncNoticeStatus" role="status">尚未连接 Google 云盘，云端词表和课文还没有下载。</span>
+      <button id="connectDriveNoticeBtn" type="button">连接云盘并恢复数据</button>
+    </section>
 
     <section id="listenPage" class="learning-page active">
       <section class="layout">
@@ -300,7 +305,7 @@
           </article>
           <aside class="read-board">
             <label for="readWhiteboard">白板</label>
-            <textarea id="readWhiteboard" spellcheck="false" placeholder="在这里随便写。载入课文后，白板跟这篇课文一起保存；登录 Google 后同步到你的 Google Drive。"></textarea>
+            <textarea id="readWhiteboard" spellcheck="false" placeholder="在这里随便写。载入课文后，白板跟这篇课文一起保存；登录统一账户并连接 Google 云盘后同步。"></textarea>
           </aside>
         </div>
       </div>
@@ -998,7 +1003,7 @@
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20261004-2"></script>
-  <script src="src/app.js?v=20261004-4"></script>
+  <script src="src/user-data.js?v=20261004-3"></script>
+  <script src="src/app.js?v=20261004-5"></script>
 </body>
 </html>

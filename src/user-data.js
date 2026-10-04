@@ -256,8 +256,8 @@
         return;
       }
       if (existing) counts.updated += 1;
-      else if (!incoming.deleted) counts.added += 1;
-      else return;
+      // Keep even a previously unseen deletion: an older device/file must not resurrect it later.
+      else counts.added += 1;
       if (dryRun) return;
       const record = { identity, id, scope: incoming.scope, collection: incoming.collection, key: incoming.key, value: incoming.deleted ? null : incoming.value, updatedAt: incoming.updatedAt, deleted: incoming.deleted };
       cache.set(id, record);
