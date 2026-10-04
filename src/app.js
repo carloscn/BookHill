@@ -964,7 +964,7 @@ const fallbackSentences = [
           if (counts.added || counts.updated) refreshAfterUserDataChange();
           if (changedLibraries.size || counts.added || counts.updated) await refreshLibrariesAfterSync(changedLibraries);
           const local = userData.exportDocument({ identity: userDataIdentityMeta() });
-          if (!cloudSync.sameDocument(local, remote)) await googleDrive.push(local);
+          if (!cloudSync.sameDocument(local, remote) || remote?.identity?.type !== "idm") await googleDrive.push(local);
           state.cloudLastSyncedAt = new Date().toISOString();
           const time = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
           renderCloudAuthState(`已同步 · ${time}`);
