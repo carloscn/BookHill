@@ -14,6 +14,7 @@ RSYNC_EXTRA=()
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
+chmod 755 "$STAGE"  # mktemp makes it 700, and rsync -a would carry that to the served directory
 
 cp index.html "$STAGE/"
 cp -r assets "$STAGE/assets"
