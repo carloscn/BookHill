@@ -44,6 +44,20 @@ Real paths on vpsde (not in this repo, live only on the box):
    curl -s https://lang.mltz.tech/ | grep -o '<title>[^<]*</title>'
    ```
 
+## Promo page (bookhill.mltz.tech)
+
+`website/` is a separate one-page site that introduces the app. It is not part of the
+app and is never shipped by `deploy.sh` (its allowlist only takes `index.html` and `src/`).
+
+| Path | What |
+|---|---|
+| `website/index.html`, `website/assets/` | The page and its screenshots (no build step) |
+| `website/deploy.sh` | Generates `robots.txt` / `sitemap.xml` and rsyncs to `vpsde:/home/carlos/bookhill-site/public/` |
+| `deploy/nginx-bookhill-mltz.conf` | Server block, installed as `/etc/nginx/sites-available/bookhill-mltz` |
+
+DNS: a proxied (orange-cloud) `bookhill` A record in Cloudflare pointing at vpsde, like
+`tinyserial`. To update the page, run `website/deploy.sh`; nothing is automated.
+
 ## Automatic deployment (GitHub Actions)
 
 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) runs the unit tests,

@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BookHill — 用你自己的句子，练英语和西班牙语</title>
+<meta name="description" content="BookHill（langLSRW）是免费的浏览器学习工具：逐句听写、跟读评分、课文阅读、离线词典与间隔复习，支持英语和西班牙语。导入你自己的句库和词表，数据只保存在你的浏览器和你自己的 Google Drive。">
+<meta property="og:title" content="BookHill">
+<meta property="og:description" content="听、说、读、写：用你自己的句子练英语和西班牙语。">
+<meta property="og:image" content="https://bookhill.mltz.tech/assets/listen-light.webp">
+<meta property="og:url" content="https://bookhill.mltz.tech/">
+<meta property="og:locale" content="zh_CN">
+<link rel="canonical" href="https://bookhill.mltz.tech/">
+<meta name="theme-color" content="#0e1113" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<style>
+/* Same system as tinyserial.mltz.tech, with BookHill's green (src/styles.css --green #16a34a / #15803d) as the accent */
+:root {
+  --bg: #ffffff;
+  --bg-2: #f6f8f9;
+  --card: #ffffff;
+  --ink: #0f1a1c;
+  --ink-2: #2a3c42;
+  --ink-3: #576f76;
+  --line: #e5ebee;
+  --accent: #16a34a;
+  --accent-btn: #15803d;
+  --accent-btn-hover: #166534;
+  --accent-ink: #ffffff;
+  --ok: #16a34a;
+  --bad: #dc2626;
+  --code-bg: #0e1113;
+  --code-ink: #f2f4f5;
+  --code-dim: #8ba2ad;
+  --shadow: 0 1px 2px rgba(15,26,28,.05), 0 12px 40px -12px rgba(15,26,28,.2);
+  --radius: 14px;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1113;
+    --bg-2: #13181b;
+    --card: #181c1f;
+    --ink: #f2f4f5;
+    --ink-2: #b7cad4;
+    --ink-3: #8ba2ad;
+    --line: #2a3236;
+    --accent: #22c55e;
+    --accent-btn: #15803d;
+    --accent-btn-hover: #16a34a;
+    --accent-ink: #ffffff;
+    --ok: #22c55e;
+    --bad: #f87171;
+    --code-bg: #0b0e10;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 20px 60px -20px rgba(0,0,0,.7);
+  }
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+img { max-width: 100%; display: block; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 600px) { .wrap { padding: 0 16px; } }
+
+/* nav */
+header {
+  position: sticky; top: 0; z-index: 10;
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border-bottom: 1px solid transparent;
+  transition: border-color .2s;
+}
+header.scrolled { border-bottom-color: var(--line); }
+nav { display: flex; align-items: center; gap: 28px; height: 64px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -.01em; text-decoration: none; font-size: 17px; }
+.brand svg { width: 28px; height: 28px; }
+.nav-links { display: flex; gap: 22px; margin-left: auto; align-items: center; font-size: 14.5px; }
+.nav-links a { text-decoration: none; color: var(--ink-2); }
+.nav-links a:hover { color: var(--ink); }
+.nav-links .open { color: var(--accent); font-weight: 600; }
+.gh { display: inline-flex; align-items: center; gap: 6px; }
+.gh svg { width: 18px; height: 18px; }
+@media (max-width: 640px) { .nav-links .hide-sm { display: none; } }
+
+/* hero */
+.hero { padding-top: 88px; padding-bottom: 40px; text-align: center; }
+.badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--ink-2);
+  border: 1px solid var(--line); background: var(--card);
+  padding: 5px 12px 5px 8px; border-radius: 999px; text-decoration: none;
+}
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+h1 {
+  font-size: clamp(36px, 6.2vw, 68px);
+  line-height: 1.08; letter-spacing: -.01em; font-weight: 720;
+  margin: 26px auto 20px;
+}
+h1 em { font-style: normal; color: var(--accent); }
+.lead { font-size: clamp(17px, 2vw, 19px); color: var(--ink-2); max-width: 640px; margin: 0 auto; }
+.lead b { color: var(--ink); font-weight: 600; }
+.cta { display: flex; gap: 12px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 20px; border-radius: 10px; font-weight: 560; font-size: 15px;
+  text-decoration: none; border: 1px solid var(--line); background: var(--card);
+  transition: transform .15s, box-shadow .15s, border-color .15s;
+}
+.btn:hover { transform: translateY(-1px); border-color: var(--ink-3); }
+.btn.primary { background: var(--accent-btn); color: var(--accent-ink); border-color: var(--accent-btn); }
+.btn.primary:hover { background: var(--accent-btn-hover); border-color: var(--accent-btn-hover); box-shadow: 0 8px 24px -10px var(--accent-btn); }
+.btn svg { width: 17px; height: 17px; }
+
+/* dictation demo: types the sentence, gets one word wrong, corrects it */
+.demo { margin: 56px auto 0; max-width: 760px; text-align: left; }
+.demo-card { border: 1px solid var(--line); background: var(--card); border-radius: var(--radius); padding: 18px 20px 16px; box-shadow: var(--shadow); }
+.demo .target { font-size: clamp(17px, 2.4vw, 22px); line-height: 1.5; color: var(--ink-3); }
+.demo .target span { border-radius: 4px; padding: 0 1px; transition: color .15s, background-color .15s; }
+.demo .target .ok { color: var(--ok); }
+.demo .target .bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+.demo .zh { color: var(--ink-3); font-size: 15px; margin: 2px 0 14px; }
+.demo .input {
+  font-size: clamp(17px, 2.4vw, 22px); line-height: 1.5; min-height: 1.5em;
+  border: 2px solid var(--accent); border-radius: 10px; padding: 8px 12px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.demo .input .bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); border-radius: 4px; }
+.demo .caret { display: inline-block; width: 2px; height: 1.1em; vertical-align: -.15em; background: var(--ink); margin-left: 1px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.demo .stats { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font: 12.5px var(--mono); color: var(--ink-3); }
+.demo .stats b { color: var(--ink); font-weight: 650; }
+.demo .caption { font: 12px var(--mono); color: var(--ink-3); margin-top: 10px; text-align: center; }
+
+/* screenshot */
+.shot { margin: 56px auto 0; max-width: 1040px; position: relative; }
+.shot::before {
+  content: ""; position: absolute; inset: 8% 6% -6%; z-index: -1;
+  background: radial-gradient(60% 60% at 50% 40%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%);
+  filter: blur(40px); opacity: .55;
+}
+.shot img, .pic { border-radius: 12px; box-shadow: var(--shadow); border: 1px solid var(--line); width: 100%; height: auto; }
+
+/* sections */
+section { padding: 96px 0; }
+.eyebrow { font: 600 12.5px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+h2 { font-size: clamp(28px, 3.6vw, 42px); letter-spacing: -.01em; line-height: 1.15; margin: 12px 0 14px; font-weight: 700; }
+.sub { color: var(--ink-2); max-width: 580px; margin: 0; font-size: 17px; }
+
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-top: 48px; }
+@media (max-width: 880px) { .features { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+.feature { background: var(--card); padding: 28px 26px 30px; }
+.feature .ico { width: 36px; height: 36px; border-radius: 9px; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); margin-bottom: 18px; }
+.feature .ico svg { width: 19px; height: 19px; }
+.feature h3 { margin: 0 0 6px; font-size: 16.5px; }
+.feature p { margin: 0; color: var(--ink-2); font-size: 15px; }
+
+/* specs strip */
+.specs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 56px; }
+@media (max-width: 760px) { .specs { grid-template-columns: repeat(2, 1fr); } }
+.spec { border-top: 1px solid var(--line); padding-top: 18px; }
+.spec b { display: block; font: 650 26px/1.2 var(--sans); letter-spacing: -.02em; }
+.spec span { color: var(--ink-3); font-size: 14px; }
+
+/* showcases */
+.split { display: grid; grid-template-columns: 1fr 1.25fr; gap: 56px; align-items: center; }
+.split.rev { grid-template-columns: 1.25fr 1fr; }
+.split + .split { margin-top: 88px; }
+.split.phone { grid-template-columns: 1.4fr 1fr; }
+.split.phone .pic { max-width: 300px; margin: 0 auto; }
+.showcase-t { font-size: 22px; margin: 0 0 10px; color: var(--ink); }
+@media (max-width: 880px) {
+  .split, .split.rev, .split.phone { grid-template-columns: 1fr; gap: 36px; }
+  .split.rev > :first-child { order: 2; }
+}
+.checks { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 12px; }
+.checks li { display: flex; gap: 12px; color: var(--ink-2); }
+.checks li::before { content: ""; flex: none; width: 18px; height: 18px; margin-top: 4px; border-radius: 50%; background: color-mix(in srgb, var(--ok) 16%, transparent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2316a34a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 10.5l3 3 6-7'/%3E%3C/svg%3E") center/14px no-repeat; }
+.checks b { color: var(--ink); font-weight: 600; }
+
+/* start */
+.start { background: var(--bg-2); border-block: 1px solid var(--line); }
+.steps { list-style: none; padding: 0; margin: 40px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; counter-reset: step; }
+@media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+.steps li { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 22px 24px; counter-increment: step; }
+.steps li::before { content: counter(step); display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: var(--bg); font: 650 14px var(--mono); margin-bottom: 14px; }
+.steps h3 { margin: 0 0 6px; font-size: 16.5px; }
+.steps p { margin: 0; color: var(--ink-2); font-size: 15px; }
+.steps a { color: var(--accent); text-underline-offset: 3px; }
+.fmt-t { margin: 56px 0 0; font-size: 20px; }
+.tabs { display: inline-flex; gap: 4px; padding: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 11px; margin: 18px 0 14px; flex-wrap: wrap; }
+.tab { font: inherit; font-size: 14px; font-weight: 550; padding: 7px 14px; border-radius: 8px; border: 0; background: none; color: var(--ink-2); cursor: pointer; }
+.tab[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+.code {
+  position: relative; background: var(--code-bg); color: var(--code-ink);
+  border-radius: var(--radius); padding: 22px 24px; overflow-x: auto;
+  font: 13.5px/1.75 var(--mono); box-shadow: var(--shadow);
+}
+.code pre { margin: 0; white-space: pre; }
+.code .c { color: var(--code-dim); }
+.code .p { color: var(--accent); }
+.copy {
+  position: absolute; top: 12px; right: 12px;
+  font: 500 12px var(--sans); color: var(--code-ink); cursor: pointer;
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 7px; padding: 5px 10px;
+}
+.copy:hover { background: rgba(255,255,255,.14); }
+.note { color: var(--ink-3); font-size: 14px; margin-top: 14px; }
+.note code, .sub code, .feature code, .steps code { font-family: var(--mono); font-size: .9em; background: var(--card); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; color: var(--ink-2); }
+[hidden] { display: none !important; }
+
+/* final cta */
+.final { text-align: center; }
+.final h2 { margin-inline: auto; }
+.final .sub { margin: 0 auto; max-width: 640px; }
+
+footer { border-top: 1px solid var(--line); padding: 32px 0 44px; color: var(--ink-3); font-size: 14px; }
+footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+footer .links { margin-left: auto; display: flex; gap: 20px; flex-wrap: wrap; }
+footer a { text-decoration: none; }
+footer a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header id="top">
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--ink)"/><path d="M5 22l6.5-9 4 5.5 3-3.5L27 22" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 25.5h14" stroke="var(--accent)" stroke-width="2.4" stroke-linecap="round" opacity=".55"/></svg>
+        BookHill
+      </a>
+      <div class="nav-links">
+        <a class="hide-sm" href="#features">功能</a>
+        <a class="hide-sm" href="#data">数据</a>
+        <a class="hide-sm" href="#start">开始使用</a>
+        <a class="gh" href="https://github.com/carloscn/BookHill" aria-label="GitHub">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          <span class="hide-sm">GitHub</span>
+        </a>
+        <a class="open" href="https://lang.mltz.tech">打开应用 →</a>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero wrap">
+    <a class="badge" href="https://github.com/carloscn/BookHill/releases/latest">
+      <span class="dot"></span><span>v2.3.2 已发布 · 免费，打开浏览器就能用</span>
+    </a>
+    <h1>用你自己的句子，<br><em>练听说读写。</em></h1>
+    <p class="lead"><b>BookHill</b> 是在浏览器里练英语和西班牙语的工具（应用里叫 langLSRW，取 Listen · Speak · Read · Write）。听一句写一句、跟读打分、读课文、背单词，练的都是你自己导入的材料。</p>
+    <div class="cta">
+      <a class="btn primary" href="https://lang.mltz.tech">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5v11l8.5-5.5L7 4.5z"/></svg>
+        <span>开始练习</span>
+      </a>
+      <a class="btn" href="https://github.com/carloscn/BookHill">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 .2a8 8 0 00-2.53 15.59c.4.07.55-.17.55-.38v-1.49c-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.5 7.5 0 014 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 008 .2z"/></svg>
+        <span>查看源码</span>
+      </a>
+    </div>
+
+    <div class="demo" aria-hidden="true">
+      <div class="demo-card">
+        <div class="target" id="demoTarget"></div>
+        <div class="zh">你能告诉我怎么去火车站吗？</div>
+        <div class="input" id="demoInput"></div>
+        <div class="stats"><span>准确率 <b id="demoAcc">100%</b></span><span>已写 <b id="demoDone">0</b> / 10 词</span><span>错误 <b id="demoErr">0</b></span></div>
+      </div>
+      <div class="caption">听写 · 每打完一个词就判对错，写错的词标红</div>
+    </div>
+
+    <figure class="shot" style="margin-bottom:0">
+      <picture>
+        <source srcset="assets/listen-dark.webp" media="(prefers-color-scheme: dark)">
+        <img src="assets/listen-light.webp" width="1600" height="813" alt="BookHill 的听说页面：当前句子、中文翻译、句子成分分析、听写输入框和跟读面板">
+      </picture>
+    </figure>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="eyebrow">功能</div>
+      <h2>一个网页，把听说读写都练到。</h2>
+      <p class="sub">不用装软件。打开网页，导入一份句子，马上开始。</p>
+
+      <div class="features">
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0118 0v6"/><path d="M21 19a2 2 0 01-2 2h-1v-6h3v4zM3 19a2 2 0 002 2h1v-6H3v4z"/></svg></div>
+          <h3>逐句听写</h3>
+          <p>听一句写一句，逐词实时反馈，并统计准确率、速度、流畅度和错误数。支持顺序、随机和只练错句。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v4"/></svg></div>
+          <h3>跟读评分</h3>
+          <p>按住说话，语音识别和原句对比，给出相似度，标出漏说、说错和多说的词，还能回放录音。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 014 4v13a3 3 0 00-3-3H2zM22 4h-6a4 4 0 00-4 4v13a3 3 0 013-3h7z"/></svg></div>
+          <h3>课文阅读</h3>
+          <p>课文按句拆开，每句一种底色。点一句就朗读，右键一个词就查词典，旁边的白板记笔记。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg></div>
+          <h3>导入你自己的句库</h3>
+          <p>txt、TSV、LRC 歌词、Anki / Tatoeba 导出，或者直接选一张 Google 表格。导入前先预览，重复的句子自动合并。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20V3H6.5A2.5 2.5 0 004 5.5v14zM4 19.5A2.5 2.5 0 006.5 22H20v-5"/><path d="M9 8h7M9 12h5"/></svg></div>
+          <h3>离线词典和背词</h3>
+          <p>词典装进浏览器，查词不联网。内置牛津 3000、四六级、雅思、托福、GRE 词表，按间隔重复安排预习、复习和测验。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 7H6v4M12 7h6v4M6 11H3.5v4M6 11h2.5v4M18 11v4"/><circle cx="3.5" cy="18" r="1.5"/><circle cx="8.5" cy="18" r="1.5"/><circle cx="18" cy="18" r="1.5"/></svg></div>
+          <h3>句子成分分析</h3>
+          <p>一键标出主语、谓语（含时态语态）、宾语、表语、补语、定语和状语，一直拆到从句和短语。免费，秒出结果。</p>
+        </div>
+      </div>
+
+      <div class="specs">
+        <div class="spec"><b>英 / 西</b><span>两种学习语言，进度分开保存</span></div>
+        <div class="spec"><b>77 万</b><span>词条的英汉离线词典 ECDICT</span></div>
+        <div class="spec"><b>16.5 万</b><span>条可直接导入的英语、西语例句</span></div>
+        <div class="spec"><b>0</b><span>条学习数据保存在服务器上</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:0" id="listen">
+    <div class="wrap">
+      <div class="split">
+        <div>
+          <div class="eyebrow">听 · 说</div>
+          <h2>先听清，再写对，最后说出来。</h2>
+          <p class="sub">同一句话，在一个页面里练完听写和跟读。卡住的句子打个星，以后只练错句。</p>
+          <ul class="checks">
+            <li><span><b>听得清楚</b> — 朗读可调语速，英音美音可选，单词可以单独重放；有音频和 LRC 字幕的材料逐句播放原声</span></li>
+            <li><span><b>看得明白</b> — 成分分析把句子拆成主干、一级和全部三个层次；英语句子还能用你自己的 AI 接口做分层语法讲解</span></li>
+            <li><span><b>手不离键盘</b> — 上一句、下一句、朗读、跟读都有快捷键，并且可以自己改</span></li>
+          </ul>
+        </div>
+        <picture>
+          <source srcset="assets/listen-detail-dark.webp" media="(prefers-color-scheme: dark)">
+          <img class="pic" src="assets/listen-detail-light.webp" width="1400" height="563" loading="lazy" alt="句子成分分析：Could you tell me how to get to the train station 被标出主语、谓语、宾语和补语，下方是听写输入框">
+        </picture>
+      </div>
+
+      <div class="split rev" id="read">
+        <picture>
+          <source srcset="assets/read-dark.webp" media="(prefers-color-scheme: dark)">
+          <img class="pic" src="assets/read-light.webp" width="1600" height="1025" loading="lazy" alt="读页面：课文 The Old Bookshop 按句分色显示，右侧白板记着生词和句型">
+        </picture>
+        <div>
+          <div class="eyebrow">读</div>
+          <h2>一篇课文，配一块白板。</h2>
+          <p class="sub">把文章贴进课文库，读页面会用大字号按句排好。读到哪一句就点哪一句。</p>
+          <ul class="checks">
+            <li><span><b>按句拆分</b> — 空行分段，句号、问号、感叹号分句，每句一种底色，长段落也不会读串行</span></li>
+            <li><span><b>点句朗读，右键查词</b> — 不用离开课文就能听发音、看释义</span></li>
+            <li><span><b>白板跟着课文走</b> — 生词、句型、心得写在旁边，下次打开这篇课文还在</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:0" id="data">
+    <div class="wrap">
+      <div class="eyebrow">你的数据</div>
+      <h2>学习记录归你，不归服务器。</h2>
+      <p class="sub">服务器上只有网页代码和一个不保存任何内容的句法分析服务。你导入和练习的一切，只在你自己的设备和云盘里。</p>
+
+      <div class="features">
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></svg></div>
+          <h3>存在你自己的 Google Drive</h3>
+          <p>登录统一账户并连接云盘后，句库、词表、课文、收藏和复习进度同步到你 Drive 里看得见的 <code>langLSRW/</code> 文件夹。只申请 <code>drive.file</code> 权限，看不到你的其他文件。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
+          <h3>不登录也能用</h3>
+          <p>选「本机用户」，数据全部留在浏览器里，离线也能练。随时可以导出一份 JSON 备份，换电脑再导入。</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div>
+          <h3>AI 密钥加密保存</h3>
+          <p>AI 接口的 API Key 用 AES-GCM 加密后只存在本机，绑定账户和接口地址，从不显示、导出或同步。页面有严格的内容安全策略，只允许本站和 Google 的脚本运行。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="padding-top:0">
+    <div class="wrap split phone">
+      <div>
+        <div class="eyebrow">界面</div>
+        <h2>电脑上顺手，手机上也能用。</h2>
+        <p class="sub">一套界面适配桌面和手机宽度，通勤路上也能刷几句。</p>
+        <ul class="checks">
+          <li><span><b>浅色和深色</b> — 默认跟随系统，也可以手动切换</span></li>
+          <li><span><b>五套配色</b> — 默认绿、GitHub、Reddit、Twitter、Anki，字体和语法颜色都能改</span></li>
+          <li><span><b>推荐 Chrome 或 Edge</b> — 朗读和语音识别用的是浏览器自带的 Web Speech；Firefox 能听写，但不能跟读评分</span></li>
+        </ul>
+      </div>
+      <img class="pic" src="assets/phone-light.webp" width="780" height="1440" loading="lazy" alt="BookHill 在手机宽度下的听说页面">
+    </div>
+  </section>
+
+  <section id="start" class="start">
+    <div class="wrap">
+      <div class="eyebrow">开始使用</div>
+      <h2>三步，从第一句开始。</h2>
+      <p class="sub">不需要安装。词典和现成的句库放在 GitHub 数据发布里，下载一次就好。</p>
+
+      <ol class="steps">
+        <li>
+          <h3>打开并登录</h3>
+          <p>打开 <a href="https://lang.mltz.tech">lang.mltz.tech</a>，用统一账户登录（支持 Google、用户名或 Passkey），或者直接以本机用户开始。</p>
+        </li>
+        <li>
+          <h3>下载词典和句库</h3>
+          <p>从 <a href="https://github.com/carloscn/BookHill/releases/tag/dictionaries-2026.10">数据发布</a> 下载：英汉 ECDICT、西语 Wiktionary 词典，以及 30,150 句英语、134,910 句西语例句。</p>
+        </li>
+        <li>
+          <h3>安装、导入、开练</h3>
+          <p>词典在 设置 → 本地词典 → 从文件安装；句库在 句库 → 导入。也可以导入你自己整理的句子。</p>
+        </li>
+      </ol>
+
+      <h3 class="fmt-t">导入你自己的材料</h3>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-tab="txt">文本 .txt</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="tsv">TSV / Anki</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="words">我的词表</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="sheet">Google 表格</button>
+      </div>
+
+      <div class="code" data-panel="txt">
+        <button class="copy" type="button">复制</button>
+<pre><span class="c"># 一行一句，竖线左边是句子，右边是翻译。# 开头的行是注释</span>
+Hello | 你好
+Could you tell me how to get to the train station? | 你能告诉我怎么去火车站吗？
+¿Qué es eso? | 那是什么？</pre>
+      </div>
+
+      <div class="code" data-panel="tsv" hidden>
+        <button class="copy" type="button">复制</button>
+<pre><span class="c"># 句子⇥翻译，或 编号⇥句子⇥翻译；Anki、Tatoeba、manythings.org 的导出文件直接可用</span>
+The early bird catches the worm.	早起的鸟儿有虫吃。
+1276	Let's try something.	我们试试看吧。</pre>
+      </div>
+
+      <div class="code" data-panel="words" hidden>
+        <button class="copy" type="button">复制</button>
+<pre><span class="c"># 词表同样的格式；也可以一行一个词，释义从离线词典里查</span>
+apple | 苹果
+recommend | 推荐
+bookshop</pre>
+      </div>
+
+      <div class="code" data-panel="sheet" hidden>
+<pre><span class="c"># 在 Google 的文件选择器里选一张表格，然后选好：</span>
+<span class="p">1</span>  哪一列是句子，哪一列是翻译
+<span class="p">2</span>  第一行是不是表头
+<span class="p">3</span>  新建句库，还是追加到已有句库
+<span class="c"># 之后改了表格，点「从表格更新」，新行按同样的去重规则合并进来</span></pre>
+      </div>
+
+      <p class="note">每次导入都会先预览。追加到已有句库时，重复的句子（不区分大小写和空格）可以选择合并翻译、保留原有或者覆盖。</p>
+    </div>
+  </section>
+
+  <section class="final">
+    <div class="wrap">
+      <h2>今天就从一句开始。</h2>
+      <p class="sub">BookHill 免费、源码公开，一直在更新。有想法或遇到问题，欢迎到 GitHub 提出来。</p>
+      <div class="cta">
+        <a class="btn primary" href="https://lang.mltz.tech">开始练习</a>
+        <a class="btn" href="https://github.com/carloscn/BookHill/issues">反馈问题</a>
+        <a class="btn" href="https://github.com/carloscn/BookHill/releases">更新日志</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 Carlos Wei · 基于 <a href="https://github.com/Aviator-shuke/BookHill">Aviator-shuke/BookHill</a> 开发</span>
+    <div class="links">
+      <a href="https://lang.mltz.tech">lang.mltz.tech</a>
+      <a href="https://github.com/carloscn/BookHill">GitHub</a>
+      <a href="https://tinyserial.mltz.tech">TinySerial</a>
+      <a href="https://mltz.tech">博客</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // Dictation demo: type the sentence, misspell "train", notice, fix it, finish, start over.
+  var target = 'Could you tell me how to get to the train station?';
+  var words = target.split(' ');
+  var tEl = document.getElementById('demoTarget');
+  var iEl = document.getElementById('demoInput');
+  var acc = document.getElementById('demoAcc'), done = document.getElementById('demoDone'), err = document.getElementById('demoErr');
+  var mistakes = 0;
+
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+  function render(typed) {
+    var parts = typed.split(' ');
+    var states = words.map(function (w, i) {
+      if (i >= parts.length) return '';
+      var p = parts[i], finished = i < parts.length - 1 || typed.length >= target.length;
+      if (!p) return '';
+      if (finished) return p === w ? 'ok' : 'bad';
+      return w.indexOf(p) === 0 ? '' : 'bad';
+    });
+    tEl.innerHTML = words.map(function (w, i) { return '<span class="' + states[i] + '">' + esc(w) + '</span>'; }).join(' ');
+    iEl.innerHTML = parts.map(function (p, i) { return states[i] === 'bad' ? '<span class="bad">' + esc(p) + '</span>' : esc(p); }).join(' ') + '<span class="caret"></span>';
+    var ok = states.filter(function (s) { return s === 'ok'; }).length;
+    var bad = states.filter(function (s) { return s === 'bad'; }).length;
+    done.textContent = ok;
+    err.textContent = mistakes;
+    acc.textContent = (ok + bad ? Math.round(ok / (ok + bad + mistakes) * 100) : 100) + '%';
+  }
+
+  // A script of [text to reach, delay per step]: typing adds characters, a shorter text deletes.
+  var steps = [['Could you tell me how to get to the trian ', 75], ['Could you tell me how to get to the ', 70], [target, 85]];
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { render(target); return wire(); }
+  var typed = '', s = 0;
+  function tick() {
+    var goal = steps[s][0];
+    if (typed === goal) {
+      if (s === 0) mistakes = 1;
+      s++;
+      if (s === steps.length) { render(typed); return setTimeout(function () { typed = ''; s = 0; mistakes = 0; tick(); }, 3200); }
+      return setTimeout(tick, s === 1 ? 900 : 300);
+    }
+    typed = goal.indexOf(typed) === 0 && typed.length < goal.length ? goal.slice(0, typed.length + 1) : typed.slice(0, -1);
+    render(typed);
+    setTimeout(tick, steps[s][1] + (typed.slice(-1) === ' ' ? 90 : Math.random() * 50));
+  }
+  render('');
+  setTimeout(tick, 900);
+  wire();
+
+  function wire() {
+    // sticky header border
+    var header = document.getElementById('top');
+    addEventListener('scroll', function () { header.classList.toggle('scrolled', scrollY > 8); }, { passive: true });
+
+    // format tabs
+    var tabs = document.querySelectorAll('.tab');
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        tabs.forEach(function (o) { o.setAttribute('aria-selected', o === t); });
+        document.querySelectorAll('[data-panel]').forEach(function (p) { p.hidden = p.dataset.panel !== t.dataset.tab; });
+      });
+    });
+
+    // copy buttons: copy the example lines without the comment lines
+    document.querySelectorAll('.copy').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var text = b.parentNode.querySelector('pre').innerText.split('\n').filter(function (l) { return l.charAt(0) !== '#'; }).join('\n');
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () {
+          b.textContent = '已复制';
+          setTimeout(function () { b.textContent = '复制'; }, 1400);
+        }, function () {});
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>
