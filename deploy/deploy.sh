@@ -31,8 +31,13 @@ rsync -a \
   --exclude='*' \
   ./ "$STAGE/"
 
+# Shown in the page footer and on the login card (data-app-version). The release workflow passes the tag and
+# commit; a manual deploy falls back to git.
+export LANGLSRW_VERSION="${LANGLSRW_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+export LANGLSRW_COMMIT="${LANGLSRW_COMMIT:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+
 python3 - "$STAGE" <<'PY'
-import hashlib, pathlib, re, sys
+import datetime, hashlib, html, os, pathlib, re, sys
 
 stage = pathlib.Path(sys.argv[1])
 reference = re.compile(r'((?<![\w./-])src/[^"\'?\s]+)\?v=[^"\'\s]*')
@@ -57,6 +62,19 @@ scripts = [p for p in sorted((stage / "src").rglob("*.js")) if "vendor" not in p
 inner = sum(stamp(p) for p in scripts)
 outer = stamp(stage / "index.html")
 print(f"stamped {inner} reference(s) inside src/ and {outer} in index.html")
+
+index = stage / "index.html"
+version = " · ".join([
+    os.environ["LANGLSRW_VERSION"],
+    os.environ["LANGLSRW_COMMIT"][:7],
+    datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
+])
+marker = re.compile(r"(<[^>]*\bdata-app-version\b[^>]*>)[^<]*(<)")
+text, count = marker.subn(lambda m: m.group(1) + html.escape(version) + m.group(2), index.read_text(encoding="utf-8"))
+if not count:
+    sys.exit("index.html has no data-app-version element")
+index.write_text(text, encoding="utf-8")
+print(f"version {version} ({count} place(s))")
 PY
 
 echo "Deploying langLSRW to $REMOTE ..."

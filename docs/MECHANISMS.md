@@ -290,5 +290,6 @@ BookHill 服务器不保存学习数据。已绑定用户的数据保存在自�
 - 每次推送和 PR 都由 GitHub Actions 运行测试；发布标签以 `v` 开头的 GitHub Release 才会部署到 lang.mltz.tech（`deploy/deploy.sh`：白名单 rsync，资源 URL 按内容哈希加版本号）。数据发布（如 `dictionaries-*`）不会部署。
 - 句库、词典和音频不放在服务器上：用户从数据发布下载后自行导入 / 安装（见 `data/dictionaries/README.md`）。
 - 句法分析服务（`services/parser`）单独用 `deploy/deploy-parser.sh` 部署。
+- 版本号：`deploy/deploy.sh` 把发布标签、提交和日期（如 `v2.3.4 · 5cb5d53 · 2026-11-11`）写进 `index.html` 里所有 `data-app-version` 元素（页脚和登录框）；本地未部署时显示「开发版」。
 - 本地测试：`python3 -m http.server 8849`，打开 `http://localhost:8849/`。
 - 推送或部署需要所有者的显式操作或请求。

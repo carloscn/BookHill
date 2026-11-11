@@ -15,10 +15,11 @@ const fallbackSentences = [
       speakSentence: "`",
       toggleSource: "1",
       toggleTranslation: "2",
-      nextSentence: "Right",
-      previousSentence: "Left",
-      nextSentenceInOrder: "Down",
-      previousSentenceInOrder: "Up",
+      // Ctrl + arrows: plain arrows belong to the typing box (moving the cursor to fix a typo).
+      nextSentence: "Ctrl+Right",
+      previousSentence: "Ctrl+Left",
+      nextSentenceInOrder: "Ctrl+Down",
+      previousSentenceInOrder: "Ctrl+Up",
       speakCurrentWord: "Alt+`",
       peekCurrentWord: "Alt+1",
       lookupCurrentWord: "Alt+D",
@@ -27,6 +28,17 @@ const fallbackSentences = [
       finishSentence: "Ctrl+Enter",
       holdSpeaking: "Space"
     };
+
+    // Saved settings from before Ctrl + arrows still hold the old plain-arrow defaults; move those to the new ones.
+    // A key the learner set to anything else is kept.
+    const LEGACY_ARROW_SHORTCUTS = { nextSentence: "Right", previousSentence: "Left", nextSentenceInOrder: "Down", previousSentenceInOrder: "Up" };
+
+    function migrateArrowShortcuts(shortcuts) {
+      Object.entries(LEGACY_ARROW_SHORTCUTS).forEach(([id, legacy]) => {
+        if (shortcuts[id] === legacy) shortcuts[id] = defaultShortcuts[id];
+      });
+      return shortcuts;
+    }
 
     const speakingShortcuts = {
       previousSentence: "Alt+B",
@@ -3777,7 +3789,7 @@ const fallbackSentences = [
       // Reading defaults must not create newer records that override imported/cloud settings.
       setLearningLanguage(LEARNING_LANGUAGES[saved("learningLanguage")] ? saved("learningLanguage") : "en", { persist: false, reloadLibrary: false });
       applyTheme(saved("theme"), { persist: false });
-      state.shortcuts = { ...defaultShortcuts, ...(saved("shortcuts") || {}) };
+      state.shortcuts = migrateArrowShortcuts({ ...defaultShortcuts, ...(saved("shortcuts") || {}) });
       state.speechSettings = { ...(saved("speech") || {}) };
       applyFontSettings(saved("fonts"), { persist: false });
       applyGrammarColors(saved("grammarColors"), { persist: false });
