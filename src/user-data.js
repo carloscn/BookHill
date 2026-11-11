@@ -125,15 +125,18 @@
     }
   }
 
-  function changed() {
+  // Listeners get { collections }: the collections a single write touched, or null when many records may have
+  // changed at once (opening an identity, an import, deleting an identity).
+  function changed(collections = null) {
     version += 1;
-    listeners.forEach((listener) => listener());
+    const change = { collections };
+    listeners.forEach((listener) => listener(change));
   }
 
   function writeRecord(record) {
     cache.set(record.id, record);
     pending.set(`${record.identity}\u0002${record.id}`, record);
-    changed();
+    changed([record.collection]);
     scheduleFlush();
   }
 

@@ -35,7 +35,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261004-3">
+  <link rel="stylesheet" href="src/styles.css?v=20261111-2">
 
 </head>
 <body data-active-page="listenPage">
@@ -160,8 +160,8 @@
                 <option value="audio">音频字幕</option>
               </select>
               <select id="modeSelect" class="compact-select" aria-label="练习模式">
-                <option value="ordered">顺序</option>
-                <option value="random" selected>随机</option>
+                <option value="ordered" selected>顺序</option>
+                <option value="random">随机</option>
                 <option value="fulltext">全文</option>
                 <option value="mistakes">错句</option>
               </select>
@@ -211,7 +211,23 @@
                       <button id="decreaseSentenceIndexBtn" type="button" title="上一句序号" aria-label="上一句序号">▼</button>
                     </span>
                   </div>
-                  <span id="counterTotal">/ 0</span>
+                  <details id="sentenceJumpMenu" class="sentence-jump-menu">
+                    <summary id="counterTotal" title="打开句子跳转：回到第一句、跳到固定句，或从列表中选一句作为当前学习位置">/ 0</summary>
+                    <div class="sentence-jump-popover" role="dialog" aria-label="句子跳转">
+                      <div class="sentence-jump-actions">
+                        <button type="button" data-sentence-jump="first" title="回到第一句">⏮ 第一句</button>
+                        <button type="button" id="sentenceJumpPinnedBtn" data-sentence-jump="pinned" title="跳到固定句">📌 固定句</button>
+                        <button type="button" data-sentence-jump="last" title="跳到最后一句">最后一句 ⏭</button>
+                      </div>
+                      <div class="sentence-jump-pin">
+                        <button type="button" id="sentenceJumpPinBtn" title="把当前句设为这个句库的固定句，之后可以一键回到这里">把当前句设为固定句</button>
+                        <span id="sentenceJumpPinNote" class="small-note"></span>
+                      </div>
+                      <input id="sentenceJumpSearch" type="search" autocomplete="off" placeholder="搜索原句、翻译，或输入序号" aria-label="搜索要跳转的句子">
+                      <div id="sentenceJumpList" class="sentence-jump-list" role="listbox" aria-label="句子列表"></div>
+                      <div id="sentenceJumpNote" class="small-note"></div>
+                    </div>
+                  </details>
                 </div>
                 <details class="help-popover">
                   <summary title="查看听说练习快捷键">?</summary>
@@ -1003,7 +1019,7 @@
   <script src="src/languages/es/text.js?v=20260928-2"></script>
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
-  <script src="src/user-data.js?v=20261004-3"></script>
-  <script src="src/app.js?v=20261004-5"></script>
+  <script src="src/user-data.js?v=20261111-1"></script>
+  <script src="src/app.js?v=20261111-3"></script>
 </body>
 </html>
