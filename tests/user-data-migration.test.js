@@ -62,7 +62,8 @@ test("first opening an identity reads defaults without stamping over old/cloud l
   const context = { LEARNING_LANGUAGES: { en: {}, es: {} }, defaultShortcuts: {}, state: {},
     userData: { get: () => undefined, put: () => assert.fail("Reading defaults must not write newer settings") },
     defaultSettingValue: name => name === "theme" ? { mode: "system", palette: "default" } : {},
-    setLearningLanguage: value => language.push(value), document: { querySelectorAll: () => [] } };
+    setLearningLanguage: value => language.push(value), document: { querySelectorAll: () => [] },
+    migrateArrowShortcuts: shortcuts => shortcuts };
   for (const name of ["applyTheme", "applyFontSettings", "applyGrammarColors", "loadAiSettings", "restoreAiKey",
     "loadPracticeSettings", "loadSpeechSettings", "populateVoices", "renderShortcutSettings", "updateSpeechRateIndicator"]) context[name] = () => {};
   vm.runInNewContext(source.slice(start, end) + "globalThis.apply = applyIdentitySettings;", context);
@@ -70,4 +71,14 @@ test("first opening an identity reads defaults without stamping over old/cloud l
   context.userData.get = (_collection, name) => name === "learningLanguage" ? "es" : undefined;
   context.apply();
   assert.deepEqual(language, ["en", "es"]);
+});
+
+test("saved plain-arrow sentence shortcuts move to Ctrl + arrows; custom keys are kept", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../src/app.js"), "utf8");
+  const start = source.indexOf("    const LEGACY_ARROW_SHORTCUTS");
+  const end = source.indexOf("    const speakingShortcuts", start);
+  const context = { defaultShortcuts: { nextSentence: "Ctrl+Right", previousSentence: "Ctrl+Left", nextSentenceInOrder: "Ctrl+Down", previousSentenceInOrder: "Ctrl+Up" } };
+  vm.runInNewContext(source.slice(start, end) + "globalThis.migrate = migrateArrowShortcuts;", context);
+  const migrated = context.migrate({ nextSentence: "Right", previousSentence: "Left", nextSentenceInOrder: "Alt+N", previousSentenceInOrder: "Up", speakSentence: "`" });
+  assert.deepEqual({ ...migrated }, { nextSentence: "Ctrl+Right", previousSentence: "Ctrl+Left", nextSentenceInOrder: "Alt+N", previousSentenceInOrder: "Ctrl+Up", speakSentence: "`" });
 });

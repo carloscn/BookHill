@@ -85,6 +85,9 @@ jobs:
         env:
           # rrsync roots the key at the site directory, so "./" is its top.
           LANGLSRW_DEPLOY_TARGET: ${{ secrets.DEPLOY_HOST }}:./
+          # Shown in the page footer: the release tag (or the branch/tag of a manual run) and the commit.
+          LANGLSRW_VERSION: ${{ github.event.release.tag_name || github.ref_name }}
+          LANGLSRW_COMMIT: ${{ github.sha }}
         run: deploy/deploy.sh
       - name: Verify the live site serves this build
         run: |

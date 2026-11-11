@@ -6654,3 +6654,16 @@
         width: auto;
       }
     }
+
+    /* Release version (written by deploy/deploy.sh) */
+    .site-footer-version,
+    .login-version {
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .login-version {
+      margin: -4px 0 8px;
+      text-align: center;
+    }

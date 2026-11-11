@@ -35,13 +35,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap">
-  <link rel="stylesheet" href="src/styles.css?v=20261111-2">
+  <link rel="stylesheet" href="src/styles.css?v=20261111-3">
 
 </head>
 <body data-active-page="listenPage">
   <section id="loginScreen" class="login-screen active" aria-label="登录" tabindex="-1">
     <div class="login-card">
       <h1>langLSRW</h1>
+      <div class="login-version small-note" data-app-version title="当前网页版本">开发版</div>
       <div class="login-options">
         <section class="login-option" aria-labelledby="cloudLoginTitle">
           <h2 id="cloudLoginTitle" class="login-option-description">统一账户·云端同步</h2>
@@ -339,6 +340,9 @@
       </a>
       <span class="site-footer-dot" aria-hidden="true">·</span>
       <span>鸣谢 <a href="https://apps.ankiweb.net/" target="_blank" rel="noopener">Anki</a>（apps.ankiweb.net）</span>
+      <span class="site-footer-dot" aria-hidden="true">·</span>
+      <!-- deploy/deploy.sh writes the release version here (tag · commit · date); "开发版" = not a release build. -->
+      <span class="site-footer-version" data-app-version title="当前网页版本">开发版</span>
     </footer>
   </main>
   <div id="passageModal" class="library-modal" hidden>
@@ -1020,6 +1024,6 @@
   <script src="src/languages/en/dictionary.js?v=20260928-2"></script>
   <script src="src/languages/es/dictionary.js?v=20260928-2"></script>
   <script src="src/user-data.js?v=20261111-1"></script>
-  <script src="src/app.js?v=20261111-3"></script>
+  <script src="src/app.js?v=20261111-4"></script>
 </body>
 </html>
