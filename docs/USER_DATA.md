@@ -47,7 +47,7 @@
 |---|---|---|---|---|
 | 身份 | `settings` | 状态 | `learningLanguage`、`theme`、`shortcuts`、`speech`、`fonts`、`grammarColors`、`dictionaryAutoSpeak`、`ai` | 学习语言（新身份默认 `en`）和各项设置；朗读设置中英语与西语的口音、声音分开（`accent` / `accent_es`，`voiceURI` / `voiceURI_es`）；`ai` 只含接口地址和模型。新身份缺少的设置使用默认值 |
 | 身份 | `localSecrets` | 状态（仅本机） | `aiApiKey` | 个人 AI API Key：按身份保存，但标为 `exportable: false`，永不导出、不参与导入、不上传云端；换设备需重新填写 |
-| 语言 | `position` | 状态 | `last` | 最后位置：`{ libraryLabel, index }` |
+| 语言 | `position` | 状态 | `last` | 最后位置：`{ libraryLabel, libraryId, index, positions: {句库 id: 序号}, pins? }`；`pins` 是「句子跳转」里的固定句，按句库保存 `{ "lib:<句库 id>" 或 "label:<句库名>": { index, text } }`（先按原句文字找，找不到再用序号） |
 | 语言 | `favoriteWord` | 状态 | 单词（小写） | `{ w 单词, r 星级, t 收藏时间（秒）, f 筛选字段, s 来源句引用 或 st/sx 来源句原文和翻译 }`。`f` 只存非空的 `tag`、`oxford`、`collins`、`bnc`、`frq` |
 | 语言 | `favoriteSentence` | 状态 | 见“记录编号” | 内置句库句子：`{ lib, id, lf 句库指纹, fp: null, r, t }`；其他句子：`{ text, tr 翻译, fp: null, r, t }` |
 | 语言 | `wordProgress` | 状态 | 单词（小写） | `{ r: { 练习方式: 排期 }, m: { 练习方式: 手动掌握时间 } }`；排期字段见 `WORD_REVIEW.md` 第 6 节 |

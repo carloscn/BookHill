@@ -332,6 +332,98 @@ const fallbackSentences = [
       const end = counterIndexInput.value.length;
       counterIndexInput.setSelectionRange(end, end);
     }
+
+    // ---- 句子跳转: move the learning pointer anywhere — first / last sentence, the library's 固定句 (one pinned
+    // sentence per library, kept in the position record), or any sentence picked from a searchable list.
+    const SENTENCE_JUMP_LIMIT = 200;
+
+    function jumpToSentence(index) {
+      if (!state.sentences.length) return;
+      const next = Math.max(0, Math.min(index, state.sentences.length - 1));
+      $("sentenceJumpMenu").removeAttribute("open");
+      if (next === state.index) return;
+      state.index = next;
+      resetCurrent(true);
+    }
+
+    function sentencePinKey() {
+      return state.currentLibraryLabel === "我的句库" && state.activeLibraryId ? `lib:${state.activeLibraryId}` : `label:${state.currentLibraryLabel}`;
+    }
+
+    // The pin keeps the sentence text so it still finds the sentence after the library changed (e.g. an append).
+    function pinnedSentenceIndex() {
+      const pin = loadLastPosition()?.pins?.[sentencePinKey()];
+      if (!pin) return -1;
+      if (pin.text) {
+        const found = state.sentences.findIndex((item) => sentenceText(item) === pin.text);
+        if (found >= 0) return found;
+      }
+      return Number.isInteger(pin.index) && pin.index < state.sentences.length ? pin.index : -1;
+    }
+
+    function pinCurrentSentence() {
+      if (!state.sentences.length) return;
+      const previous = loadLastPosition() || {};
+      const pins = { ...(previous.pins || {}), [sentencePinKey()]: { index: state.index, text: sentenceText(state.sentences[state.index]) } };
+      userData.put("position", "last", { ...previous, pins }, languageScope());
+      renderSentenceJump();
+    }
+
+    function renderSentenceJump() {
+      const total = state.sentences.length;
+      const pinned = pinnedSentenceIndex();
+      $("sentenceJumpPinnedBtn").disabled = pinned < 0;
+      $("sentenceJumpPinnedBtn").textContent = pinned >= 0 ? `📌 第 ${pinned + 1} 句` : "📌 无固定句";
+      $("sentenceJumpPinnedBtn").title = pinned >= 0 ? `回到固定句（第 ${pinned + 1} 句）` : "还没有固定句：先跳到想要的句子，再点「把当前句设为固定句」";
+      $("sentenceJumpPinNote").textContent = pinned === state.index ? "当前句就是固定句" : "";
+      const query = $("sentenceJumpSearch").value.trim();
+      const lower = query.toLocaleLowerCase();
+      let indexes;
+      let note = "";
+      if (/^\d+$/.test(query)) {
+        const target = Math.max(1, Math.min(Number(query), total)) - 1;
+        indexes = [];
+        for (let i = Math.max(0, target - 10); i < Math.min(total, target + 40); i += 1) indexes.push(i);
+      } else if (query) {
+        indexes = [];
+        for (let i = 0; i < total && indexes.length < SENTENCE_JUMP_LIMIT; i += 1) {
+          const item = state.sentences[i];
+          if (`${sentenceText(item)}\n${sentenceTranslation(item)}`.toLocaleLowerCase().includes(lower)) indexes.push(i);
+        }
+        note = indexes.length >= SENTENCE_JUMP_LIMIT ? `只显示前 ${SENTENCE_JUMP_LIMIT} 个结果，请输入更多文字缩小范围` : (indexes.length ? "" : "没有找到匹配的句子");
+      } else {
+        indexes = [];
+        for (let i = Math.max(0, state.index - 20); i < Math.min(total, state.index + 80); i += 1) indexes.push(i);
+        if (total > indexes.length) note = "显示当前句附近的句子；搜索文字或输入序号可以找到其他句子";
+      }
+      $("sentenceJumpList").innerHTML = indexes.map((index) => `
+        <button type="button" class="sentence-jump-item${index === state.index ? " is-current" : ""}${index === pinned ? " is-pinned" : ""}" data-sentence-jump-index="${index}" role="option" aria-selected="${index === state.index}">
+          <span class="sentence-jump-no">${index + 1}</span>
+          <span class="sentence-jump-text">${escapeHtml(sentenceText(state.sentences[index]))}</span>
+        </button>`).join("");
+      $("sentenceJumpNote").textContent = total ? note : "当前没有句子";
+      // Scroll the list only (scrollIntoView would also scroll the page).
+      const list = $("sentenceJumpList");
+      const current = list.querySelector(".is-current");
+      if (current) list.scrollTop = current.offsetTop - list.offsetTop - (list.clientHeight - current.offsetHeight) / 2;
+    }
+
+    // Fixed to the viewport under 「/ 总数」 and kept inside the window, wherever the counter sits in the tool row.
+    function placeSentenceJumpPopover() {
+      const popover = document.querySelector(".sentence-jump-popover");
+      if (window.matchMedia("(max-width: 760px)").matches) {
+        popover.style.removeProperty("top");
+        popover.style.removeProperty("left");
+        return;
+      }
+      const anchor = $("counterTotal").getBoundingClientRect();
+      const width = popover.offsetWidth;
+      const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+      const below = anchor.bottom + 6;
+      const top = below + popover.offsetHeight > window.innerHeight - 8 ? Math.max(8, anchor.top - popover.offsetHeight - 6) : below;
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+    }
     const errorsEl = $("errors");
     let appConfirmResolve = null;
     let appConfirmHasCancel = true;
@@ -441,7 +533,6 @@ const fallbackSentences = [
       if (statusText) $("sourceStatus").textContent = statusText;
       state.randomHistory = [];
       state.randomForwardStack = [];
-      scheduleCloudSync();
     }
 
     function normalizeUsername(name) {
@@ -728,7 +819,8 @@ const fallbackSentences = [
         libraryLabel: state.currentLibraryLabel,
         libraryId: state.currentLibraryLabel === "我的句库" ? state.activeLibraryId : "",
         index: state.index,
-        positions
+        positions,
+        ...(previous?.pins ? { pins: previous.pins } : {})
       }, languageScope());
     }
 
@@ -806,7 +898,6 @@ const fallbackSentences = [
         Math.floor(Date.now() / 1000),
         metrics.errors.map((error) => [error.pos, error.actual])
       ], languageScope());
-      scheduleCloudSync();
     }
 
     // ---- Google sign-in + Drive sync (src/google-drive.js, src/cloud-sync.js) ----------------------------------
@@ -819,7 +910,26 @@ const fallbackSentences = [
     const idmPolicy = window.langLSRWIdmPolicy;
     const cloudSync = window.langLSRWCloudSync;
     const cloud = { running: null, timer: 0, due: 0, again: false, status: "" };
-    const CLOUD_SYNC_DELAY = 8000;
+    // How soon a change reaches Drive. Every sync downloads and uploads the whole personal-data document, so routine
+    // changes wait for a quiet moment: learning data after 30 s, and the reading position (it changes on every
+    // 上一句 / 下一句) at most every 5 minutes. Imports and library edits pass a short delay of their own. Pending
+    // changes are also synced when the page is hidden or closed.
+    const CLOUD_SYNC_DELAY = 30000;
+    const CLOUD_QUIET_SYNC_DELAY = 5 * 60 * 1000;
+    const CLOUD_QUIET_COLLECTIONS = new Set(["position", "practiceEvent", "reviewEvent"]);
+
+    function scheduleCloudSyncForChange(change) {
+      const collections = change?.collections;
+      const quiet = Array.isArray(collections) && collections.length && collections.every((name) => CLOUD_QUIET_COLLECTIONS.has(name));
+      scheduleCloudSync(quiet ? CLOUD_QUIET_SYNC_DELAY : CLOUD_SYNC_DELAY);
+    }
+
+    function syncPendingCloudChanges() {
+      if (!cloud.timer || cloud.running) return;
+      clearTimeout(cloud.timer);
+      cloud.timer = 0;
+      syncWithCloud();
+    }
 
     function cloudDisplayName(user = state.cloudUser) {
       if (!user) return "";
@@ -3789,6 +3899,7 @@ const fallbackSentences = [
         [voiceKey]: usingOriginalVoice() ? (state.speechSettings[voiceKey] || "") : $("voiceSelect").value,
         autoSpeak: $("autoSpeakToggle").checked,
         displayMode: sourceDisplayMode(),
+        practiceMode: $("modeSelect").value,
         speakWord: $("speakWordToggle").checked,
         showSource: $("showSourceToggle").checked,
         showTranslation: $("showTranslationToggle").checked
@@ -4708,7 +4819,7 @@ ${orderNote}`;
 
     function isTopMenuOpen() {
       return Boolean(
-        document.querySelector(".font-menu[open], .user-menu[open]")
+        document.querySelector(".font-menu[open], .user-menu[open], .sentence-jump-menu[open]")
         || !$("settingsModal").hidden
         || !$("libraryModal").hidden
         || !$("passageModal").hidden
@@ -4895,6 +5006,10 @@ ${orderNote}`;
       // Older settings stored a longText checkbox; it maps to 长文显示.
       const displayMode = state.speechSettings.displayMode || (state.speechSettings.longText === true ? "long" : "single");
       $("displayModeSelect").value = ["single", "long", "focus"].includes(displayMode) ? displayMode : "single";
+      // 顺序 unless the learner chose another mode (随机 is the exception, not the default).
+      const practiceMode = state.speechSettings.practiceMode;
+      $("modeSelect").value = ["ordered", "random", "fulltext", "mistakes"].includes(practiceMode) ? practiceMode : "ordered";
+      updateSentenceNavigationTitles();
       $("speakWordToggle").checked = state.speechSettings.speakWord !== false;
       $("showSourceToggle").checked = state.speechSettings.showSource !== false;
       $("showTranslationToggle").checked = state.speechSettings.showTranslation !== false;
@@ -10113,7 +10228,7 @@ ${orderNote}`;
     }
 
     function closeTopMenus(exceptMenu = null) {
-      document.querySelectorAll(".font-menu, .user-menu").forEach((menu) => {
+      document.querySelectorAll(".font-menu, .user-menu, .sentence-jump-menu").forEach((menu) => {
         if (menu !== exceptMenu) menu.removeAttribute("open");
       });
     }
@@ -10630,6 +10745,46 @@ ${orderNote}`;
       jumpToEnteredCounterIndex();
       counterIndexInput.select();
     });
+    $("sentenceJumpMenu").addEventListener("toggle", () => {
+      if (!$("sentenceJumpMenu").open) return;
+      closeTopMenus($("sentenceJumpMenu"));
+      $("sentenceJumpSearch").value = "";
+      renderSentenceJump();
+      placeSentenceJumpPopover();
+      $("sentenceJumpSearch").focus({ preventScroll: true });
+    });
+    let sentenceJumpSearchTimer = 0;
+    $("sentenceJumpSearch").addEventListener("input", () => {
+      clearTimeout(sentenceJumpSearchTimer);
+      sentenceJumpSearchTimer = setTimeout(renderSentenceJump, 120);
+    });
+    $("sentenceJumpSearch").addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        $("sentenceJumpMenu").removeAttribute("open");
+        return;
+      }
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const first = $("sentenceJumpList").querySelector("[data-sentence-jump-index]");
+      const query = $("sentenceJumpSearch").value.trim();
+      if (/^\d+$/.test(query)) jumpToSentence(Number(query) - 1);
+      else if (first) jumpToSentence(Number(first.dataset.sentenceJumpIndex));
+    });
+    $("sentenceJumpMenu").addEventListener("click", (event) => {
+      const item = event.target.closest("[data-sentence-jump-index]");
+      if (item) {
+        jumpToSentence(Number(item.dataset.sentenceJumpIndex));
+        return;
+      }
+      const action = event.target.closest("[data-sentence-jump]")?.dataset.sentenceJump;
+      if (action === "first") jumpToSentence(0);
+      if (action === "last") jumpToSentence(state.sentences.length - 1);
+      if (action === "pinned" && pinnedSentenceIndex() >= 0) jumpToSentence(pinnedSentenceIndex());
+    });
+    $("sentenceJumpPinBtn").addEventListener("click", pinCurrentSentence);
+    document.addEventListener("pointerdown", (event) => {
+      if ($("sentenceJumpMenu").open && !event.target.closest("#sentenceJumpMenu")) $("sentenceJumpMenu").removeAttribute("open");
+    });
     $("increaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(1));
     $("decreaseSentenceIndexBtn").addEventListener("click", () => adjustCounterIndex(-1));
     $("analyzeGrammarBtn").addEventListener("click", () => analyzeCurrentGrammar());
@@ -10926,6 +11081,7 @@ ${orderNote}`;
     $("modeSelect").addEventListener("change", () => {
       stopFullTextReading();
       updateSentenceNavigationTitles();
+      saveSpeechSettings();
     });
     updateSentenceNavigationTitles();
     $("voiceSelect").addEventListener("change", saveSpeechSettings);
@@ -11281,6 +11437,9 @@ ${orderNote}`;
       }
       await tryLoadDefaultLibrary();
       render();
-      userData.onChange(() => scheduleCloudSync());
+      userData.onChange(scheduleCloudSyncForChange);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") syncPendingCloudChanges();
+      });
       initializeCloudAuth();
     })();

@@ -6210,12 +6210,18 @@
       min-width: 0;
     }
 
-    @media (max-width: 760px) {
-      .sentence-tool-row {
-        flex-wrap: wrap;
-        white-space: normal;
-      }
+    /* The tool row wraps whenever it does not fit (not only on phones): on mid-size windows a single line pushed the
+       sentence card, and the whole page, wider than the window. */
+    .sentence-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
 
+    .sentence-tool-row {
+      flex-wrap: wrap;
+      white-space: normal;
+    }
+
+    @media (max-width: 760px) {
       .topbar {
         flex-wrap: wrap;
       }
@@ -6531,5 +6537,120 @@
       #readWhiteboard {
         min-height: 220px;
         resize: vertical;
+      }
+    }
+
+    /* 句子跳转 (click 「/ 总数」 next to the sentence index) */
+    .sentence-jump-menu {
+      position: relative;
+    }
+
+    .sentence-jump-menu summary {
+      list-style: none;
+      cursor: pointer;
+      border-radius: var(--radius-sm);
+      padding: 0 4px;
+      color: var(--chip);
+    }
+
+    .sentence-jump-menu summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .sentence-jump-menu summary:hover,
+    .sentence-jump-menu[open] summary {
+      color: var(--green-dark);
+      background: var(--green-soft);
+    }
+
+    .sentence-jump-popover {
+      position: fixed;
+      z-index: 40;
+      display: grid;
+      gap: 8px;
+      width: min(420px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      padding: 10px;
+      box-shadow: var(--shadow-pop);
+      color: var(--text);
+      font-size: 13px;
+      white-space: normal;
+    }
+
+    .sentence-jump-actions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .sentence-jump-actions button {
+      min-width: 0;
+      padding-inline: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .sentence-jump-pin {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .sentence-jump-list {
+      display: grid;
+      max-height: min(320px, 50vh);
+      overflow-y: auto;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+    }
+
+    .sentence-jump-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: baseline;
+      min-height: 30px;
+      border: 0;
+      border-radius: 0;
+      border-bottom: 1px solid var(--line-soft);
+      background: transparent;
+      padding: 4px 8px;
+      text-align: left;
+    }
+
+    .sentence-jump-item.is-current {
+      background: var(--green-soft);
+      color: var(--green-dark);
+      font-weight: 650;
+    }
+
+    .sentence-jump-item.is-pinned .sentence-jump-no::after {
+      content: " 📌";
+    }
+
+    .sentence-jump-no {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .sentence-jump-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 760px) {
+      .sentence-jump-popover {
+        position: fixed;
+        left: 16px;
+        right: 16px;
+        top: auto;
+        bottom: 16px;
+        width: auto;
       }
     }

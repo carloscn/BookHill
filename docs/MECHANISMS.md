@@ -53,7 +53,7 @@ BookHill 服务器不保存学习数据。已绑定用户的数据保存在自�
 - `langLSRW/libraries/*.tsv`：每个句库一个文件，句库 id、语言、更新时间和来源表格放在文件的 `appProperties` 中；`cloudSync.planLibrarySync` 决定上传 / 下载 / 改名 / 删除，本机删除通过墓碑（`langLSRWLibraryTombstones:<身份>`）把 Drive 文件移到回收站。
 - 我的词表（`wordList` 记录）属于个人数据文档，随它同步。课文库（`passage`）和读页白板（`passageNote`）也在这份文档里，不另存文件。
 - 同步顺序与反馈：先恢复、保存并同步个人文档，再同步句库；本机保存失败停止上传，句库失败只报告句库问题。登录后上方始终显示连接状态和「连接云盘并恢复数据」/「立即同步」入口，成功时显示英 / 西合计词表和课文数量。账户中心 Google 登录不包含 BookHill 云盘授权。
-- 自动同步：个人数据变化后约 8 秒、导入或修改句库后约 0.5 秒（`scheduleCloudSync()` 保留最早的截止时间）；同步进行中再有变化会在结束后再同步一次。
+- 自动同步：每次同步都要下载并上传整份个人数据文档，所以按变化类型安排时间（`scheduleCloudSyncForChange()`，`userData.onChange` 会告诉监听者这次写入了哪些集合）：只改了学习位置（`position`，每次上一句 / 下一句 / 跳转都会写）时最多 5 分钟同步一次；其他学习数据（收藏、背词进度、设置、语法结果……）约 30 秒；导入或修改句库约 0.5 秒。`scheduleCloudSync()` 保留最早的截止时间；页面切到后台或关闭时（`visibilitychange` 为 hidden）立即同步尚未同步的变化；同步进行中再有变化会在结束后再同步一次。
 - 文档不包含词典、录音、其他身份的数据和 AI API 密钥。
 
 相关实现：`src/google-drive.js`、`src/cloud-sync.js`、`src/user-data.js`、`src/library-store.js` 和 `src/app.js` 的 `syncWithCloud()`。
